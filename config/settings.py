@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
+from loguru import logger
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -45,8 +46,8 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware', 
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -131,7 +132,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # REST Framework Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -199,6 +200,7 @@ CORS_ALLOW_HEADERS = [
     'dnt',
     'origin',
     'user-agent',
+    'x-active-role',
     'x-csrftoken',
     'x-requested-with',
 ]
@@ -231,5 +233,76 @@ SPECTACULAR_SETTINGS = {
                 'bearerFormat': 'JWT',
             }
         }
+    },
+}
+
+LOGGING_CONFIG = None
+
+os.makedirs(BASE_DIR / 'logs', exist_ok=True)
+
+LOGURU_LOGGINS = {
+    'handlers': [
+        {
+            'sink': BASE_DIR / 'logs/debug.log',
+            'level': 'DEBUG',
+            'filter': lambda record: record['level'].no == logger.level('DEBUG').no,
+            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
+            'rotation': '10 MB',
+            'retention': '2 days',
+            'compression': 'zip',
+        },
+        {
+            'sink': BASE_DIR / 'logs/error.log',
+            'level': 'ERROR',
+            'filter': lambda record: record['level'].no == logger.level('ERROR').no,
+            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
+            'rotation': '10 MB',
+            'retention': '2 days',
+            'compression': 'zip'
+        }
+        ,
+        {
+            'sink': BASE_DIR / 'logs/info.log',
+            'level': 'INFO',
+            'filter': lambda record: record['level'].no == logger.level('INFO').no,
+            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
+            'rotation': '10 MB',
+            'retention': '2 days',
+            'compression': 'zip',
+        },
+           {
+            'sink': BASE_DIR / 'logs/warning.log',
+            'level': 'WARNING',
+            'filter': lambda record: record['level'].no == logger.level('WARNING').no,
+            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
+            'rotation': '10 MB',
+            'retention': '2 days',
+            'compression': 'zip'
+        },
+        {
+            'sink': BASE_DIR / 'logs/critical.log',
+            'level': 'CRITICAL',
+            'filter': lambda record: record['level'].no == logger.level('CRITICAL').no,
+            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
+            'rotation': '10 MB',
+            'retention': '2 days',
+            'compression': 'zip'
+        }
+    ]
+}
+
+logger.configure(**LOGURU_LOGGINS)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'loguru': {
+            'class': 'SEA-api.interceptor.InterceptorHandler',
+        },
+    },
+    'root': {
+        'handlers': ['loguru'],
+        'level': 'DEBUG',
     },
 }

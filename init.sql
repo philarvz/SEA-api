@@ -36,31 +36,59 @@ CREATE TABLE IF NOT EXISTS user_account (
 
 
 -- =====================================
--- TABLE: term (cuatrimestre)
+-- TABLE: generation (academic cohort)
 -- =====================================
 
-CREATE TABLE IF NOT EXISTS term (
-    id_term SERIAL PRIMARY KEY,
-    term_name VARCHAR(100) NOT NULL,
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
+CREATE TABLE IF NOT EXISTS generation (
+    id_generation SERIAL PRIMARY KEY,
+    year INT NOT NULL UNIQUE,
+    total_levels INT NOT NULL DEFAULT 11 CHECK (total_levels >= 1),
     status BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 
 -- =====================================
--- TABLE: group
+-- TABLE: period (academic term)
+-- Three periods per year:
+--   Enero-Abril | Mayo-Agosto | Septiembre-Diciembre
+-- =====================================
+
+CREATE TABLE IF NOT EXISTS period (
+    id_period SERIAL PRIMARY KEY,
+    year INT NOT NULL,
+    period_name VARCHAR(50) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    status BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT uq_period_year_name UNIQUE (year, period_name),
+    CONSTRAINT chk_period_dates CHECK (end_date > start_date),
+    CONSTRAINT chk_period_name CHECK (
+        period_name IN ('Enero-Abril', 'Mayo-Agosto', 'Septiembre-Diciembre')
+    )
+);
+
+
+-- =====================================
+-- TABLE: group (academic group)
 -- =====================================
 
 CREATE TABLE IF NOT EXISTS "group" (
     id_group SERIAL PRIMARY KEY,
-    id_term INT NOT NULL,
-    group_name VARCHAR(100) NOT NULL,
+    id_generation INT NOT NULL,
+    id_period INT NULL,
+    group_letter VARCHAR(5) NOT NULL,
+    academic_level INT NOT NULL CHECK (academic_level >= 1),
     status BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT fk_group_term
-        FOREIGN KEY (id_term)
-        REFERENCES term(id_term)
-        ON DELETE CASCADE
+    CONSTRAINT uq_group_generation_letter UNIQUE (id_generation, group_letter),
+    CONSTRAINT fk_group_generation
+        FOREIGN KEY (id_generation)
+        REFERENCES generation(id_generation)
+        ON DELETE RESTRICT
+        ON UPDATE CASCADE,
+    CONSTRAINT fk_group_period
+        FOREIGN KEY (id_period)
+        REFERENCES period(id_period)
+        ON DELETE RESTRICT
         ON UPDATE CASCADE
 );
 
@@ -71,14 +99,9 @@ CREATE TABLE IF NOT EXISTS "group" (
 
 CREATE TABLE IF NOT EXISTS subject (
     id_subject SERIAL PRIMARY KEY,
-    id_term INT NOT NULL,
     name VARCHAR(150) NOT NULL,
-    status BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT fk_subject_term
-        FOREIGN KEY (id_term)
-        REFERENCES term(id_term)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE
+    level_number INT NOT NULL CHECK (level_number >= 1),
+    status BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 
