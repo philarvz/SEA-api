@@ -113,9 +113,10 @@ El sistema utiliza 11 tablas principales:
 
 - **person** - Información de personas (estudiantes, profesores, admins)
 - **user_account** - Cuentas de usuario (1:1 con person)
-- **term** - Cuatrimestres académicos
-- **group** - Grupos de estudiantes
-- **subject** - Materias
+- **generation** - Generaciones académicas por año
+- **period** - Periodos académicos (Enero-Abril, Mayo-Agosto, Septiembre-Diciembre)
+- **group** - Grupos de estudiantes (con academic_level)
+- **subject** - Materias (con academic_level)
 - **unit** - Unidades temáticas
 - **question** - Preguntas de exámenes
 - **answer** - Respuestas de preguntas
