@@ -4,10 +4,9 @@ Covers: Generation, Period, Group, Subject and auxiliary operations.
 """
 
 from rest_framework import serializers
-from django.core.exceptions import ObjectDoesNotExist
 
 from .models import Generation, Period, Group, Subject, Unit
-from apps.users.models import Person
+from apps.users.models import StudentProfile
 
 
 # ---------------------------------------------------------------------------
@@ -158,22 +157,18 @@ class StatusUpdateSerializer(serializers.Serializer):
 
 
 class AssignStudentSerializer(serializers.Serializer):
-    """Validates the student to be assigned to a group."""
+    """Validates the student (StudentProfile pk) to be assigned to a group."""
     id_person = serializers.IntegerField(required=True)
 
     def validate_id_person(self, value):
         try:
-            person = Person.objects.select_related('user_account').get(pk=value)
-        except Person.DoesNotExist:
+            student = StudentProfile.objects.select_related('user').get(pk=value)
+        except StudentProfile.DoesNotExist:
             raise serializers.ValidationError('El alumno especificado no existe.')
-        try:
-            user_account = person.user_account
-        except ObjectDoesNotExist:
-            raise serializers.ValidationError('El usuario no tiene cuenta registrada.')
-        if user_account.role != 'student':
+        if student.user.role != 'student':
             raise serializers.ValidationError(
                 'El usuario especificado no tiene el rol de alumno.'
             )
-        if not person.status:
+        if not student.user.is_active:
             raise serializers.ValidationError('El alumno está inactivo.')
         return value

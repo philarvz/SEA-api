@@ -1,6 +1,7 @@
 """
 Exams module models
 Includes: Exam, ExamQuestion, ExamPerson
+Note: id_teacher and id_person now reference users.User (AbstractUser)
 """
 
 from django.db import models
@@ -18,7 +19,7 @@ class Exam(models.Model):
         related_name='exams'
     )
     id_teacher = models.ForeignKey(
-        'users.Person',
+        'users.User',
         on_delete=models.RESTRICT,
         db_column='id_teacher',
         related_name='created_exams'
@@ -94,7 +95,7 @@ class ExamPerson(models.Model):
         related_name='assignments'
     )
     id_person = models.ForeignKey(
-        'users.Person',
+        'users.User',
         on_delete=models.CASCADE,
         db_column='id_person',
         related_name='assigned_exams'
