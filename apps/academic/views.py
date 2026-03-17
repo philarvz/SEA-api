@@ -27,7 +27,7 @@ from .serializers import (
 )
 from .permissions import IsTeacherOrAdmin
 from .services import PeriodService
-from apps.users.models import Person
+from apps.users.models import StudentProfile
 from utils.responses import success_response, error_response
 
 
@@ -554,13 +554,13 @@ class GroupAssignStudentView(APIView):
 
         id_person = serializer.validated_data['id_person']
         try:
-            person = Person.objects.get(pk=id_person)
-        except Person.DoesNotExist:
+            student = StudentProfile.objects.select_related('user').get(pk=id_person)
+        except StudentProfile.DoesNotExist:
             return error_response('El alumno especificado no existe.', status_code=status.HTTP_404_NOT_FOUND)
 
         try:
-            person.id_group = group
-            person.save(update_fields=['id_group'])
+            student.group = group
+            student.save(update_fields=['group_id'])
             logger.info('Alumno asignado a grupo | person_id={} group_id={}', id_person, pk)
         except IntegrityError as exc:
             logger.error('IntegrityError al asignar alumno | person_id={} group_id={} detail={}', id_person, pk, exc)
@@ -570,7 +570,7 @@ class GroupAssignStudentView(APIView):
             )
 
         return success_response(
-            {'id_person': person.pk, 'id_group': group.pk},
+            {'id_person': student.pk, 'id_group': group.pk},
             'Alumno asignado al grupo exitosamente.',
         )
 
