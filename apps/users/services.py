@@ -1,17 +1,3 @@
-"""
-User Registration Service
-Business logic for creating users, generating credentials, and sending
-welcome e-mails.
-
-Password generation contract
------------------------------
-Format: ALU{last_3_chars_of_matricula}{3_random_alphanumeric}
-Example: matricula='20233tn070'  →  'ALU070xR4'
-
-The plain-text password is ONLY transmitted via the welcome e-mail; it is
-never stored or returned in the API response.
-"""
-
 import random
 import string
 
