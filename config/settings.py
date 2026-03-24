@@ -64,7 +64,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -212,6 +212,24 @@ CORS_ALLOW_HEADERS = [
 # Mock Credentials Configuration
 MOCK_EMAIL = config('MOCK_EMAIL', default='admin@legacydevs.com')
 MOCK_PASSWORD = config('MOCK_PASSWORD', default='1234')
+
+
+# ------------------------------------------------------------------
+# E-mail Configuration (Gmail SMTP with App Password)
+# ------------------------------------------------------------------
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_USE_SSL = False
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='20233tn070@utez.edu.mx')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='oipe vgdd faaa jyoc')
+DEFAULT_FROM_EMAIL = config(
+    'DEFAULT_FROM_EMAIL',
+    default='SEA Sistema <20233tn070@utez.edu.mx>',
+)
+# Timeout de conexión SMTP en segundos
+EMAIL_TIMEOUT = 10
 
 
 # Spectacular (Swagger) Configuration
