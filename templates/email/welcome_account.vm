@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bienvenido a SEA</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #F5F5F5; font-family: Arial, Helvetica, sans-serif; }
+    .wrapper { max-width: 620px; margin: 30px auto; background: #FFFFFF; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+    .header { background-color: #1565C0; padding: 28px 32px; text-align: center; }
+    .header h1 { color: #FFFFFF; margin: 0; font-size: 22px; letter-spacing: .5px; }
+    .header p { color: #BBDEFB; margin: 6px 0 0; font-size: 13px; }
+    .body { padding: 32px; color: #333333; }
+    .body h2 { font-size: 20px; margin: 0 0 12px; color: #1565C0; }
+    .body p { font-size: 14px; line-height: 1.6; margin: 0 0 16px; }
+    .credentials-box { background: #F5F5F5; border: 1px solid #E0E0E0; border-radius: 6px; padding: 20px 24px; margin: 20px 0; }
+    .credentials-box h3 { margin: 0 0 14px; font-size: 15px; color: #424242; }
+    .cred-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #EEEEEE; font-size: 14px; }
+    .cred-row:last-child { border-bottom: none; }
+    .cred-label { color: #757575; font-weight: bold; min-width: 160px; }
+    .cred-value { color: #212121; word-break: break-all; }
+    .password-value { font-family: 'Courier New', Courier, monospace; font-size: 16px; font-weight: bold; color: #1565C0; letter-spacing: 1px; }
+    .alert-box { background: #FFF8E1; border-left: 4px solid #FFC107; border-radius: 4px; padding: 14px 18px; margin: 20px 0; }
+    .alert-box p { margin: 0; font-size: 13px; color: #5D4037; }
+    .alert-box strong { color: #E65100; }
+    .cta-btn { display: inline-block; margin: 8px 0 20px; padding: 12px 28px; background-color: #1565C0; color: #FFFFFF; text-decoration: none; border-radius: 5px; font-size: 14px; font-weight: bold; }
+    .footer { background-color: #1565C0; padding: 18px 32px; text-align: center; }
+    .footer p { color: #BBDEFB; margin: 0; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+
+    <!-- ── Header ── -->
+    <div class="header">
+      <h1>📚 SEA — Sistema de Evaluación Académica</h1>
+      <p>UTEZ · Gestión de exámenes y evaluaciones</p>
+    </div>
+
+    <!-- ── Body ── -->
+    <div class="body">
+      <h2>¡Bienvenido(a), {{ full_name }}!</h2>
+      <p>
+        Tu cuenta en el <strong>Sistema de Evaluación Académica (SEA)</strong> ha sido
+        creada exitosamente. A continuación encontrarás tus credenciales de acceso.
+      </p>
+
+      <!-- Credentials box -->
+      <div class="credentials-box">
+        <h3>🔑 Tus credenciales de acceso</h3>
+
+        <div class="cred-row">
+          <span class="cred-label">Nombre completo</span>
+          <span class="cred-value">{{ full_name }}</span>
+        </div>
+        <div class="cred-row">
+          <span class="cred-label">Matrícula / Usuario</span>
+          <span class="cred-value">{{ matricula }}</span>
+        </div>
+        <div class="cred-row">
+          <span class="cred-label">Correo electrónico</span>
+          <span class="cred-value">{{ email }}</span>
+        </div>
+        <div class="cred-row">
+          <span class="cred-label">Rol asignado</span>
+          <span class="cred-value">{{ role }}</span>
+        </div>
+        <div class="cred-row">
+          <span class="cred-label">Contraseña temporal</span>
+          <span class="cred-value password-value">{{ password }}</span>
+        </div>
+      </div>
+
+      <!-- Security alert -->
+      <div class="alert-box">
+        <p>
+          <strong>⚠️ Recomendación de seguridad:</strong><br />
+          Esta es una contraseña generada automáticamente. Por tu seguridad,
+          <strong>te recomendamos cambiarla la primera vez que accedas al sistema</strong>
+          desde la sección <em>Mi Perfil</em>.
+        </p>
+      </div>
+
+      <p>Puedes iniciar sesión haciendo clic en el siguiente botón:</p>
+      <a class="cta-btn" href="http://localhost:5173/login">Iniciar sesión en SEA</a>
+
+      <p style="font-size:13px; color:#9E9E9E;">
+        Si no esperabas este correo, por favor ignóralo o comunícate con el
+        administrador del sistema.
+      </p>
+    </div>
+
+    <!-- ── Footer ── -->
+    <div class="footer">
+      <p>© 2026 SEA — Sistema de Evaluación Académica · UTEZ. Todos los derechos reservados.</p>
+    </div>
+
+  </div>
+</body>
+</html>

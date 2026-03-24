@@ -24,6 +24,13 @@ class User(AbstractUser):
     id_user = models.AutoField(primary_key=True)
     # Sobreescribimos email para hacerlo único
     email = models.EmailField(max_length=150, unique=True)
+    # Matrícula institucional única por usuario (ej. 20233tn070)
+    matricula = models.CharField(
+        max_length=20,
+        unique=True,
+        db_column='matricula',
+        help_text='Matrícula institucional única del usuario.',
+    )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
     status = models.BooleanField(default=True)
 
@@ -73,7 +80,7 @@ class StudentProfile(models.Model):
 class TeacherProfile(models.Model):
     """
     Perfil específico para docentes.
-    Almacena datos propios del rol: departamento.
+    Almacena datos propios del rol: departamento y materias asignadas.
     """
 
     user = models.OneToOneField(
@@ -82,6 +89,13 @@ class TeacherProfile(models.Model):
         related_name='teacher_profile'
     )
     department = models.CharField(max_length=150, blank=True)
+    # Materias asignadas al docente (M2M)
+    subjects = models.ManyToManyField(
+        'academic.Subject',
+        blank=True,
+        related_name='teachers',
+        db_table='teacher_subject',
+    )
 
     class Meta:
         db_table = 'teacher_profile'
