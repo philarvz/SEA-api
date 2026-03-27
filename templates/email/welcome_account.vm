@@ -81,9 +81,6 @@
         </p>
       </div>
 
-      <p>Puedes iniciar sesión haciendo clic en el siguiente botón:</p>
-      <a class="cta-btn" href="http://localhost:5173/login">Iniciar sesión en SEA</a>
-
       <p style="font-size:13px; color:#9E9E9E;">
         Si no esperabas este correo, por favor ignóralo o comunícate con el
         administrador del sistema.
