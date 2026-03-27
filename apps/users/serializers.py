@@ -14,20 +14,14 @@ User = get_user_model()
 # ---------------------------------------------------------------------------
 
 class RegisterUserSerializer(serializers.Serializer):
-    """
-    Validates the payload for POST /api/users/register/.
-
-    Conditional rules:
-        - id_group   required when role == 'student'
-        - subject_ids accepted (optional) when role == 'teacher'
-    """
 
     first_name = serializers.CharField(max_length=150, required=True)
     last_name = serializers.CharField(max_length=150, required=True)
     email = serializers.EmailField(required=True)
     matricula = serializers.CharField(max_length=20, required=True)
     role = serializers.ChoiceField(choices=User.ROLE_CHOICES)
-    status = serializers.BooleanField(default=True)
+    # Status siempre True, se envía pero no se usa desde el cliente
+    status = serializers.BooleanField(default=True, required=False)
 
     # Optional — only used depending on role
     id_group = serializers.IntegerField(required=False, allow_null=True)
@@ -105,11 +99,6 @@ class SubjectSummarySerializer(serializers.Serializer):
 
 
 class UserResponseSerializer(serializers.ModelSerializer):
-    """
-    Read-only serializer returned after a successful registration.
-    Includes role-specific profile data (group for students,
-    subjects for teachers).
-    """
 
     full_name = serializers.CharField(read_only=True)
     group = serializers.SerializerMethodField()
@@ -140,6 +129,67 @@ class UserResponseSerializer(serializers.ModelSerializer):
         return None
 
     def get_subjects(self, obj: User):
+        if obj.role == 'teacher':
+            try:
+                return [
+                    {'id_subject': s.pk, 'name': s.name}
+                    for s in obj.teacher_profile.subjects.all()
+                ]
+            except Exception:
+                pass
+        return []
+
+
+# ---------------------------------------------------------------------------
+# User List — Output
+# ---------------------------------------------------------------------------
+
+class UserListSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(read_only=True)
+    group = serializers.SerializerMethodField()
+    subjects = serializers.SerializerMethodField()
+    status_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id_user',
+            'matricula',
+            'email',
+            'first_name',
+            'last_name',
+            'full_name',
+            'role',
+            'status',
+            'status_display',
+            'is_active',
+            'date_joined',
+            'group',
+            'subjects',
+        ]
+        read_only_fields = fields
+
+    def get_status_display(self, obj: User):
+        """Retorna el estado en formato legible"""
+        return 'Activo' if obj.status else 'Inactivo'
+
+    def get_group(self, obj: User):
+        """Retorna información del grupo si es estudiante"""
+        if obj.role == 'student':
+            try:
+                profile = obj.student_profile
+                if profile.group:
+                    return {
+                        'id_group': profile.group.pk,
+                        'group_letter': profile.group.group_letter,
+                        'academic_level': profile.group.academic_level,
+                    }
+            except Exception:
+                pass
+        return None
+
+    def get_subjects(self, obj: User):
+        """Retorna lista de materias si es docente"""
         if obj.role == 'teacher':
             try:
                 return [
