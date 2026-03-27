@@ -4,6 +4,7 @@ loguru==0.7.2
 django-cors-headers==4.3.1
 djangorestframework==3.14.0
 djangorestframework-simplejwt==5.3.1
+openpyxl==3.1.2
 psycopg==3.3.3
 psycopg-binary==3.3.3
 PyJWT==2.11.0

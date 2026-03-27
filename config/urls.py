@@ -10,6 +10,7 @@ urlpatterns = [
     
     # API endpoints
     path('api/auth/', include('apps.authentication.urls')),
+    path('api/exams/', include('apps.exams.urls')),
     path('api/', include('apps.core.urls')),
     path('api/academic/', include('apps.academic.urls')),
     path('api/users/', include('apps.users.urls')),
