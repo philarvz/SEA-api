@@ -1,4 +1,4 @@
-import random
+import secrets
 import string
 
 from django.conf import settings
@@ -117,8 +117,8 @@ class UserRegistrationService:
         prefix = prefix_map.get(role, 'USR')
         last3 = matricula[-3:]
         rand3 = ''.join(
-            random.choices(string.ascii_letters + string.digits, k=3)
-        )
+        secrets.choice(string.ascii_letters + string.digits)
+        for _ in range(3))
         return f"{prefix}{last3}{rand3}"
 
     @staticmethod

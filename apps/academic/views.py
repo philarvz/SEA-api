@@ -31,6 +31,14 @@ from apps.users.models import StudentProfile
 from utils.responses import success_response, error_response
 
 
+# Error message constants
+MSG_INVALID_DATA = 'Datos inválidos.'
+MSG_GENERATION_NOT_FOUND = 'Generación no encontrada.'
+MSG_PERIOD_NOT_FOUND = 'Periodo no encontrado.'
+MSG_GROUP_NOT_FOUND = 'Grupo no encontrado.'
+MSG_SUBJECT_NOT_FOUND = 'Materia no encontrada.'
+
+
 class CatalogPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = 'page_size'
@@ -100,7 +108,7 @@ class GenerationListCreateView(APIView):
         serializer = GenerationSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Registro de generación rechazado | errors={}', serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         try:
             instance = serializer.save()
             logger.info('Generación registrada | id={} year={}', instance.pk, instance.year)
@@ -130,7 +138,7 @@ class GenerationDetailView(APIView):
     def get(self, request, pk):
         generation = self._get_generation(pk)
         if not generation:
-            return error_response('Generación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GENERATION_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         return success_response(GenerationSerializer(generation).data)
 
     @extend_schema(
@@ -142,11 +150,11 @@ class GenerationDetailView(APIView):
     def put(self, request, pk):
         generation = self._get_generation(pk)
         if not generation:
-            return error_response('Generación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GENERATION_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         serializer = GenerationSerializer(generation, data=request.data)
         if not serializer.is_valid():
             logger.warning('Actualización de generación rechazada | id={} errors={}', pk, serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         try:
             serializer.save()
             logger.info('Generación actualizada | id={}', pk)
@@ -172,10 +180,10 @@ class GenerationStatusView(APIView):
         try:
             generation = Generation.objects.get(pk=pk)
         except Generation.DoesNotExist:
-            return error_response('Generación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GENERATION_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         serializer = StatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         generation.status = serializer.validated_data['status']
         generation.save(update_fields=['status'])
         state = 'activada' if generation.status else 'desactivada'
@@ -225,7 +233,7 @@ class PeriodListCreateView(APIView):
         serializer = PeriodSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Registro de periodo rechazado | errors={}', serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         try:
             instance = serializer.save()
             logger.info('Periodo registrado | id={} year={} name={}', instance.pk, instance.year, instance.period_name)
@@ -278,7 +286,7 @@ class PeriodDetailView(APIView):
     def get(self, request, pk):
         period = self._get_period(pk)
         if not period:
-            return error_response('Periodo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_PERIOD_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         return success_response(PeriodSerializer(period).data)
 
     @extend_schema(
@@ -290,11 +298,11 @@ class PeriodDetailView(APIView):
     def put(self, request, pk):
         period = self._get_period(pk)
         if not period:
-            return error_response('Periodo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_PERIOD_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         serializer = PeriodSerializer(period, data=request.data)
         if not serializer.is_valid():
             logger.warning('Actualización de periodo rechazada | id={} errors={}', pk, serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         try:
             serializer.save()
             logger.info('Periodo actualizado | id={}', pk)
@@ -319,10 +327,10 @@ class PeriodStatusView(APIView):
         try:
             period = Period.objects.get(pk=pk)
         except Period.DoesNotExist:
-            return error_response('Periodo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_PERIOD_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         serializer = StatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         period.status = serializer.validated_data['status']
         period.save(update_fields=['status'])
         state = 'activado' if period.status else 'desactivado'
@@ -350,7 +358,7 @@ class PeriodAdvanceGroupsView(APIView):
         try:
             period = Period.objects.get(pk=pk)
         except Period.DoesNotExist:
-            return error_response('Periodo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_PERIOD_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
         if not period.status:
             return error_response(
@@ -412,7 +420,7 @@ class GroupListCreateView(APIView):
         serializer = GroupCreateSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Registro de grupo rechazado | errors={}', serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
 
         data = serializer.validated_data
         current_period = PeriodService.get_current_period()
@@ -420,7 +428,7 @@ class GroupListCreateView(APIView):
         try:
             generation = Generation.objects.get(pk=data['id_generation'])
         except Generation.DoesNotExist:
-            return error_response('Generación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GENERATION_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
         try:
             group = Group.objects.create(
@@ -466,7 +474,7 @@ class GroupDetailView(APIView):
     def get(self, request, pk):
         group = self._get_group(pk)
         if not group:
-            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         return success_response(GroupSerializer(group).data)
 
     @extend_schema(
@@ -478,11 +486,11 @@ class GroupDetailView(APIView):
     def put(self, request, pk):
         group = self._get_group(pk)
         if not group:
-            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         serializer = GroupUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Actualización de grupo rechazada | id={} errors={}', pk, serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         data = serializer.validated_data
         try:
             group.group_letter = data['group_letter']
@@ -512,10 +520,10 @@ class GroupStatusView(APIView):
         try:
             group = Group.objects.get(pk=pk)
         except Group.DoesNotExist:
-            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         serializer = StatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         group.status = serializer.validated_data['status']
         group.save(update_fields=['status'])
         state = 'activado' if group.status else 'desactivado'
@@ -539,7 +547,7 @@ class GroupAssignStudentView(APIView):
         try:
             group = Group.objects.select_related('id_period').get(pk=pk)
         except Group.DoesNotExist:
-            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
         if not group.status:
             return error_response(
@@ -550,7 +558,7 @@ class GroupAssignStudentView(APIView):
         serializer = AssignStudentSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Asignación de alumno rechazada | group_id={} errors={}', pk, serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
 
         id_person = serializer.validated_data['id_person']
         try:
@@ -614,7 +622,7 @@ class SubjectListCreateView(APIView):
         serializer = SubjectSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Registro de materia rechazado | errors={}', serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         try:
             number_of_units = serializer.validated_data.pop('number_of_units', 0)
             instance = serializer.save()
@@ -664,7 +672,7 @@ class SubjectDetailView(APIView):
     def get(self, request, pk):
         subject = self._get_subject(pk)
         if not subject:
-            return error_response('Materia no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         return success_response(SubjectSerializer(subject).data)
 
     @extend_schema(
@@ -676,11 +684,11 @@ class SubjectDetailView(APIView):
     def put(self, request, pk):
         subject = self._get_subject(pk)
         if not subject:
-            return error_response('Materia no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         serializer = SubjectSerializer(subject, data=request.data)
         if not serializer.is_valid():
             logger.warning('Actualización de materia rechazada | id={} errors={}', pk, serializer.errors)
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         try:
             serializer.save()
             logger.info('Materia actualizada | id={}', pk)
@@ -709,7 +717,7 @@ class SubjectUnitsBySubjectView(APIView):
         try:
             subject = Subject.objects.get(pk=pk)
         except Subject.DoesNotExist:
-            return error_response('Materia no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
         units = Unit.objects.filter(id_subject=subject).order_by('unit_number', 'id_unit')
         return paginated_success_response(request, units, UnitSerializer)
@@ -727,10 +735,10 @@ class SubjectStatusView(APIView):
         try:
             subject = Subject.objects.get(pk=pk)
         except Subject.DoesNotExist:
-            return error_response('Materia no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
         serializer = StatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         subject.status = serializer.validated_data['status']
         subject.save(update_fields=['status'])
         state = 'activada' if subject.status else 'desactivada'
