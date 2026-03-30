@@ -7,6 +7,7 @@ Ejecutar después de aplicar las migraciones:
 import os
 import sys
 import django
+from decouple import config
 
 # Setup Django
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -59,39 +60,11 @@ admin_user, admin_created = create_user(
     first_name='Admin',
     last_name='LegacyDevs',
     role='admin',
-    password='1234',
+    password=config('USERS_PASSWORD', default='1234'),
     is_staff=True,
     is_superuser=True,
 )
-print_user(admin_user, '1234', admin_created)
-
-# ------------------------------------------------------------------
-# Teacher
-# ------------------------------------------------------------------
-teacher_user, teacher_created = create_user(
-    email='profesor@legacydevs.com',
-    username='profesor',
-    first_name='Profesor',
-    last_name='LegacyDevs',
-    role='teacher',
-    password='1234',
-)
-TeacherProfile.objects.get_or_create(user=teacher_user)
-print_user(teacher_user, '1234', teacher_created)
-
-# ------------------------------------------------------------------
-# Student
-# ------------------------------------------------------------------
-student_user, student_created = create_user(
-    email='alumno@legacydevs.com',
-    username='alumno',
-    first_name='Alumno',
-    last_name='LegacyDevs',
-    role='student',
-    password='1234',
-)
-StudentProfile.objects.get_or_create(user=student_user, defaults={'group': None})
-print_user(student_user, '1234', student_created)
+print_user(admin_user, config('USERS_PASSWORD'), admin_created)
 
 print("\n" + "=" * 60)
 print("✅ SEED COMPLETADO")

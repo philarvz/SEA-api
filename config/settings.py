@@ -64,7 +64,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -214,6 +214,24 @@ MOCK_EMAIL = config('MOCK_EMAIL', default='admin@legacydevs.com')
 MOCK_PASSWORD = config('MOCK_PASSWORD', default='1234')
 
 
+# ------------------------------------------------------------------
+# E-mail Configuration (Gmail SMTP with App Password)
+# ------------------------------------------------------------------
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_USE_SSL = False
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='20233tn070@utez.edu.mx')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='oipe vgdd faaa jyoc')
+DEFAULT_FROM_EMAIL = config(
+    'DEFAULT_FROM_EMAIL',
+    default='SEA Sistema <20233tn070@utez.edu.mx>',
+)
+# Timeout de conexión SMTP en segundos
+EMAIL_TIMEOUT = 10
+
+
 # Spectacular (Swagger) Configuration
 SPECTACULAR_SETTINGS = {
     'TITLE': 'SEA-API',
@@ -243,24 +261,29 @@ LOGGING_CONFIG = None
 
 os.makedirs(BASE_DIR / 'logs', exist_ok=True)
 
+# Loguru constants
+LOGURU_FORMAT = "{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"
+LOGURU_ROTATION = '10 MB'
+LOGURU_RETENTION = '2 days'
+
 LOGURU_LOGGINS = {
     'handlers': [
         {
             'sink': BASE_DIR / 'logs/debug.log',
             'level': 'DEBUG',
             'filter': lambda record: record['level'].no == logger.level('DEBUG').no,
-            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
-            'rotation': '10 MB',
-            'retention': '2 days',
+            'format': LOGURU_FORMAT,
+            'rotation': LOGURU_ROTATION,
+            'retention': LOGURU_RETENTION,
             'compression': 'zip',
         },
         {
             'sink': BASE_DIR / 'logs/error.log',
             'level': 'ERROR',
             'filter': lambda record: record['level'].no == logger.level('ERROR').no,
-            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
-            'rotation': '10 MB',
-            'retention': '2 days',
+            'format': LOGURU_FORMAT,
+            'rotation': LOGURU_ROTATION,
+            'retention': LOGURU_RETENTION,
             'compression': 'zip'
         }
         ,
@@ -268,27 +291,27 @@ LOGURU_LOGGINS = {
             'sink': BASE_DIR / 'logs/info.log',
             'level': 'INFO',
             'filter': lambda record: record['level'].no == logger.level('INFO').no,
-            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
-            'rotation': '10 MB',
-            'retention': '2 days',
+            'format': LOGURU_FORMAT,
+            'rotation': LOGURU_ROTATION,
+            'retention': LOGURU_RETENTION,
             'compression': 'zip',
         },
            {
             'sink': BASE_DIR / 'logs/warning.log',
             'level': 'WARNING',
             'filter': lambda record: record['level'].no == logger.level('WARNING').no,
-            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
-            'rotation': '10 MB',
-            'retention': '2 days',
+            'format': LOGURU_FORMAT,
+            'rotation': LOGURU_ROTATION,
+            'retention': LOGURU_RETENTION,
             'compression': 'zip'
         },
         {
             'sink': BASE_DIR / 'logs/critical.log',
             'level': 'CRITICAL',
             'filter': lambda record: record['level'].no == logger.level('CRITICAL').no,
-            'format': ("{time: YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}: {function}: {line} - {message}"),
-            'rotation': '10 MB',
-            'retention': '2 days',
+            'format': LOGURU_FORMAT,
+            'rotation': LOGURU_ROTATION,
+            'retention': LOGURU_RETENTION,
             'compression': 'zip'
         }
     ]
