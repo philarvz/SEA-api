@@ -11,6 +11,10 @@ from rest_framework.exceptions import AuthenticationFailed
 from apps.users.models import User
 
 
+# Error message constants
+MSG_INVALID_CREDENTIALS = 'Credenciales inválidas'
+
+
 class AuthenticationService:
     """
     Service class for authentication operations
@@ -58,12 +62,12 @@ class AuthenticationService:
         try:
             user_lookup = User.objects.get(email=email)
         except User.DoesNotExist:
-            raise AuthenticationFailed('Credenciales inválidas')
+            raise AuthenticationFailed(MSG_INVALID_CREDENTIALS)
 
         # Autenticar con el sistema nativo de Django
         user = authenticate(username=user_lookup.username, password=password)
         if user is None:
-            raise AuthenticationFailed('Credenciales inválidas')
+            raise AuthenticationFailed(MSG_INVALID_CREDENTIALS)
 
         # Verificar estado del usuario
         if not user.status:
@@ -115,7 +119,7 @@ class AuthenticationService:
         mock_password = settings.MOCK_PASSWORD
 
         if email != mock_email or password != mock_password:
-            raise AuthenticationFailed('Credenciales inválidas')
+            raise AuthenticationFailed(MSG_INVALID_CREDENTIALS)
 
         mock_user = {
             'id': 1,

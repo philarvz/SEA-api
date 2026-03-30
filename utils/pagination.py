@@ -70,7 +70,7 @@ class GlobalPagination(PageNumberPagination):
                     'type': 'string',
                     'nullable': True,
                     'format': 'uri',
-                    'example': 'http://api.example.com/resource?page=2',
+                    'example': 'https://api.example.com/resource?page=2',
                     'description': 'URL de la siguiente página (null si es la última)'
                 },
                 'previous': {
