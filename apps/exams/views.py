@@ -1,15 +1,24 @@
 from django.http import HttpResponse
-from django.views import View
 import openpyxl
 from openpyxl.styles import Font, Alignment
 from io import BytesIO
+from rest_framework.views import APIView
+from drf_spectacular.utils import extend_schema, OpenApiResponse
+from drf_spectacular.types import OpenApiTypes
 
 
-class QuestionTemplateDownloadView(View):
+class QuestionTemplateDownloadView(APIView):
     """
     View to generate and download a question template Excel file
     """
-
+    @extend_schema(
+        summary="Descargar Plantilla de Preguntas", 
+        description="Genera y descarga un archivo Excel con una plantilla para ingresar preguntas de examen.",
+        responses={
+            200: OpenApiTypes.BINARY,
+            400: OpenApiResponse(description="Solicitud inválida")
+        }
+    )
     def get(self, request, *args, **kwargs):
         # Create a new workbook and select the active worksheet
         wb = openpyxl.Workbook()
