@@ -6,7 +6,13 @@ from django.contrib.auth import get_user_model
 from django.db import models
 
 from .permissions import IsAdmin
-from .serializers import RegisterUserSerializer, UserResponseSerializer, UserListSerializer, UpdateUserSerializer
+from .serializers import (
+    RegisterUserSerializer, 
+    UserResponseSerializer, 
+    UserListSerializer, 
+    UpdateUserSerializer,
+    StatusUpdateSerializer
+)
 from .services import UserRegistrationService, UserUpdateService
 from utils.responses import success_response, error_response
 from utils.pagination import GlobalPagination
@@ -280,3 +286,57 @@ class UserDetailView(APIView):
                 'Error interno al actualizar el usuario.',
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class UserStatusView(APIView):
+    """
+    Vista para cambiar el estado de un usuario (activo/inactivo).
+    Endpoint: PATCH /api/users/{id}/status/
+    """
+
+    permission_classes = [IsAdmin]
+
+    @extend_schema(
+        summary='Cambiar estado de usuario',
+        tags=['Usuarios'],
+        request=StatusUpdateSerializer,
+        responses={
+            200: OpenApiResponse(description='Estado actualizado exitosamente'),
+            404: OpenApiResponse(description='Usuario no encontrado'),
+            400: OpenApiResponse(description='Datos inválidos'),
+            403: OpenApiResponse(description='Se requiere rol de administrador'),
+        },
+        description=(
+            'Cambia el estado de un usuario entre activo (true) e inactivo (false). '
+            'Solo los administradores pueden acceder.'
+        ),
+    )
+    def patch(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return error_response(
+                'Usuario no encontrado.',
+                status_code=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = StatusUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response('Datos inválidos.', serializer.errors)
+        
+        new_status = serializer.validated_data['status']
+        user.status = new_status
+        user.is_active = new_status
+        user.save(update_fields=['status', 'is_active'])
+        
+        state = 'activado' if new_status else 'desactivado'
+        logger.info('User status changed | user_id={} new_status={}', pk, new_status)
+        
+        return success_response(
+            {
+                'id_user': user.pk,
+                'status': user.status,
+                'is_active': user.is_active
+            },
+            f'Usuario {state} exitosamente.',
+        )

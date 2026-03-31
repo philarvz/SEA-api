@@ -159,6 +159,15 @@ class UpdateUserSerializer(serializers.Serializer):
 
 
 # ---------------------------------------------------------------------------
+# Status Update — Input
+# ---------------------------------------------------------------------------
+
+class StatusUpdateSerializer(serializers.Serializer):
+    """Serializer para actualizar el estado de un usuario (activo/inactivo)"""
+    status = serializers.BooleanField(required=True)
+
+
+# ---------------------------------------------------------------------------
 # Registration — Output
 # ---------------------------------------------------------------------------
 
