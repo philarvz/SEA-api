@@ -14,6 +14,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-default-key-change-this')
 
+# Encryption key for sensitive data (AES-256)
+# Generate with: import base64, os; base64.b64encode(os.urandom(32)).decode()
+# This MUST be stored in .env file
+ENCRYPTION_KEY = config('ENCRYPTION_KEY')
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=True, cast=bool)
 
