@@ -13,6 +13,6 @@ class AuditJWTAuthentication(JWTStatelessUserAuthentication):
     def authenticate(self, request):
         result = super().authenticate(request)
         if result is not None:
-            user, token = result
+            user, _ = result
             set_audit_user(user.pk)
         return result
