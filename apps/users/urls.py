@@ -3,11 +3,12 @@ Users module URL configuration
 """
 
 from django.urls import path
-from .views import RegisterUserView, ListUsersView
+from .views import UserListCreateView, UserDetailView, UserStatusView
 
 app_name = 'users'
 
 urlpatterns = [
-    path('register/', RegisterUserView.as_view(), name='register'),
-    path('', ListUsersView.as_view(), name='list-users'),
+    path('', UserListCreateView.as_view(), name='user-list-create'),
+    path('<int:pk>/', UserDetailView.as_view(), name='user-detail'),
+    path('<int:pk>/status/', UserStatusView.as_view(), name='user-status'),
 ]

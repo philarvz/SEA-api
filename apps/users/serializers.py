@@ -82,6 +82,92 @@ class RegisterUserSerializer(serializers.Serializer):
 
 
 # ---------------------------------------------------------------------------
+# Update User — Input
+# ---------------------------------------------------------------------------
+
+class UpdateUserSerializer(serializers.Serializer):
+    """Serializer para actualizar datos de un usuario existente.
+    Note: El rol no puede ser modificado después de la creación del usuario."""
+
+    first_name = serializers.CharField(max_length=150, required=False)
+    last_name = serializers.CharField(max_length=150, required=False)
+    email = serializers.EmailField(required=False)
+    matricula = serializers.CharField(max_length=20, required=False)
+    status = serializers.BooleanField(required=False)
+
+    # Optional — only used depending on role
+    id_group = serializers.IntegerField(required=False, allow_null=True)
+    subject_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_null=True,
+        help_text='IDs de materias asignadas (solo docentes).',
+    )
+
+    # -----------------------------------------------------------------
+    # Field-level validations
+    # -----------------------------------------------------------------
+
+    def validate_email(self, value: str) -> str:
+        """Validar que el email no esté en uso por otro usuario"""
+        value = value.lower().strip()
+        user_id = self.context.get('user_id')
+        if User.objects.filter(email__iexact=value).exclude(id_user=user_id).exists():
+            raise serializers.ValidationError('El correo electrónico ya está registrado.')
+        return value
+
+    def validate_matricula(self, value: str) -> str:
+        """Validar que la matrícula no esté en uso por otro usuario"""
+        value = value.strip()
+        user_id = self.context.get('user_id')
+        if User.objects.filter(matricula=value).exclude(id_user=user_id).exists():
+            raise serializers.ValidationError('La matrícula ya está registrada.')
+        return value
+
+    def validate_first_name(self, value: str) -> str:
+        return value.strip()
+
+    def validate_last_name(self, value: str) -> str:
+        return value.strip()
+
+    # -----------------------------------------------------------------
+    # Cross-field validations
+    # -----------------------------------------------------------------
+
+    def validate(self, attrs: dict) -> dict:
+        id_group = attrs.get('id_group')
+        subject_ids = attrs.get('subject_ids')
+
+        # Validar grupo si se proporciona
+        if id_group is not None:
+            from apps.academic.models import Group
+            if not Group.objects.filter(pk=id_group, status=True).exists():
+                raise serializers.ValidationError(
+                    {'id_group': 'El grupo especificado no existe o está inactivo.'}
+                )
+
+        # Validar materias si se proporcionan
+        if subject_ids is not None and len(subject_ids) > 0:
+            from apps.academic.models import Subject
+            found = Subject.objects.filter(pk__in=subject_ids, status=True).count()
+            if found != len(subject_ids):
+                raise serializers.ValidationError(
+                    {'subject_ids': 'Una o más materias especificadas no existen o están inactivas.'}
+                )
+
+        return attrs
+
+
+# ---------------------------------------------------------------------------
+# Status Update — Input
+# ---------------------------------------------------------------------------
+
+class StatusUpdateSerializer(serializers.Serializer):
+    """Serializer para actualizar el estado de un usuario (activo/inactivo)"""
+    status = serializers.BooleanField(required=True)
+
+
+# ---------------------------------------------------------------------------
 # Registration — Output
 # ---------------------------------------------------------------------------
 

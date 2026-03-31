@@ -149,8 +149,8 @@ class UserRegistrationService:
             f"Tu cuenta en SEA ha sido creada exitosamente.\n\n"
             f"Usuario (matrícula): {user.username}\n"
             f"Correo: {user.email}\n"
-            f"Contraseña temporal: {plain_password}\n\n"
-            f"Por seguridad te recomendamos cambiar tu contraseña en tu perfil.\n\n"
+            f"Clave temporal: {plain_password}\n\n"
+            f"Por seguridad te recomendamos cambiar tu clave en tu perfil.\n\n"
             f"— Equipo SEA"
         )
 
@@ -164,3 +164,74 @@ class UserRegistrationService:
         msg.send(fail_silently=False)
 
         logger.info('Welcome e-mail sent | to={}', user.email)
+
+
+class UserUpdateService:
+    """Service for updating existing users and their role-specific profiles."""
+
+    @staticmethod
+    @transaction.atomic
+    def update_user(user: User, data: dict) -> User:
+        # ----------------------------------------------------------
+        # 1. Update core user fields
+        # ----------------------------------------------------------
+        if 'first_name' in data:
+            user.first_name = data['first_name']
+        if 'last_name' in data:
+            user.last_name = data['last_name']
+        if 'email' in data:
+            user.email = data['email']
+        if 'matricula' in data:
+            # Si se actualiza la matrícula, también actualizamos el username
+            user.matricula = data['matricula']
+            user.username = data['matricula']
+        if 'status' in data:
+            user.status = data['status']
+            user.is_active = data['status']
+
+        user.save()
+
+        # ----------------------------------------------------------
+        # 2. Update role-specific profile (role cannot change)
+        # ----------------------------------------------------------
+        if user.role == 'student':
+            UserUpdateService._update_student_profile(user, data)
+        elif user.role == 'teacher':
+            UserUpdateService._update_teacher_profile(user, data)
+        # Admin no necesita perfil específico
+
+        logger.info(
+            'User updated | id={} email={} role={} matricula={}',
+            user.pk, user.email, user.role, user.matricula,
+        )
+
+        return user
+
+    @staticmethod
+    def _update_student_profile(user: User, data: dict) -> None:
+        """Update or create StudentProfile."""
+        profile, created = StudentProfile.objects.get_or_create(user=user)
+        
+        if 'id_group' in data:
+            if data['id_group'] is None:
+                profile.group = None
+            else:
+                profile.group = Group.objects.get(pk=data['id_group'])
+        
+        profile.save()
+        logger.info('Student profile {} | user_id={}', 'created' if created else 'updated', user.pk)
+
+    @staticmethod
+    def _update_teacher_profile(user: User, data: dict) -> None:
+        """Update or create TeacherProfile."""
+        profile, created = TeacherProfile.objects.get_or_create(user=user)
+        
+        if 'subject_ids' in data:
+            if data['subject_ids'] is None or len(data['subject_ids']) == 0:
+                profile.subjects.clear()
+            else:
+                subjects = Subject.objects.filter(pk__in=data['subject_ids'])
+                profile.subjects.set(subjects)
+        
+        profile.save()
+        logger.info('Teacher profile {} | user_id={}', 'created' if created else 'updated', user.pk)

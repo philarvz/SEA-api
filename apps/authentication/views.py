@@ -6,12 +6,17 @@ Handles HTTP requests for authentication endpoints
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.exceptions import AuthenticationFailed
 from drf_spectacular.utils import extend_schema, OpenApiResponse
+from loguru import logger
 
-from .serializers import LoginSerializer, TokenResponseSerializer
+from .serializers import LoginSerializer, TokenResponseSerializer, ChangePasswordSerializer
 from .services import AuthenticationService
+from utils.responses import success_response, error_response
+
+# Constante para mensaje de error
+MSG_INCORRECT_CREDENTIAL = 'Credencial incorrecta.'
 
 
 class LoginView(APIView):
@@ -27,16 +32,16 @@ class LoginView(APIView):
             401: OpenApiResponse(description='Credenciales inválidas'),
             500: OpenApiResponse(description='Error interno del servidor'),
         },
-        description='Autenticar usuario con email y contraseña',
+        description='Autenticar usuario con email y credenciales',
         tags=['Authentication']
     )
     def post(self, request):
         """
-        Authenticate user with email and password
+        Authenticate user with email and credentials
         
         Request body:
             - email: User email
-            - password: User password
+            - password: User access key
             
         Response:
             - access: Access token
@@ -145,3 +150,76 @@ class HealthCheckView(APIView):
             'service': 'authentication',
             'mode': 'database' if settings.USE_DATABASE else 'mock'
         }, status=status.HTTP_200_OK)
+
+
+class ChangePasswordView(APIView):
+    """
+    Vista para cambiar la clave de acceso del usuario autenticado.
+    Requiere autenticación JWT.
+    El payload debe estar cifrado con AES-256-GCM.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary='Cambiar clave de acceso',
+        tags=['Authentication'],
+        request=ChangePasswordSerializer,
+        responses={
+            200: OpenApiResponse(description='Clave cambiada exitosamente'),
+            400: OpenApiResponse(description='Datos inválidos'),
+            401: OpenApiResponse(description='Clave actual incorrecta o no autenticado'),
+        },
+        description=(
+            'Permite al usuario autenticado cambiar su clave de acceso. '
+            'El payload debe estar cifrado usando AES-256-GCM. '
+            'Campos requeridos (cifrados): current_password, new_password, confirm_password.'
+        ),
+    )
+    def post(self, request):
+        # Obtener el usuario real de la base de datos (no el TokenUser)
+        from apps.users.models import User
+        try:
+            user = User.objects.get(id_user=request.user.id)
+        except User.DoesNotExist:
+            logger.error('User not found in database | user_id={}', request.user.id)
+            return error_response(
+                'Usuario no encontrado.',
+                status_code=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = ChangePasswordSerializer(data=request.data, context={'user': user})
+        
+        if not serializer.is_valid():
+            logger.warning(
+                'Access key change validation failed | user={} errors={}',
+                user.username, serializer.errors
+            )
+            return error_response('Datos inválidos.', serializer.errors)
+        
+        # Obtener datos descifrados del contexto
+        decrypted_data = serializer.context.get('decrypted_data', {})
+        current_password = decrypted_data.get('current_password')
+        new_password = decrypted_data.get('new_password')
+        
+        # Verificar que la clave actual sea correcta
+        if not user.check_password(current_password):
+            logger.warning(
+                'Access key change failed: incorrect current key | user={}',
+                user.username
+            )
+            return error_response(
+                'La clave actual es incorrecta.',
+                {'current_password': MSG_INCORRECT_CREDENTIAL},
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        # Cambiar la clave de acceso
+        user.set_password(new_password)
+        user.save()
+        
+        logger.info('Access key changed successfully | user={}', user.username)
+        
+        return success_response(
+            {'message': 'Clave cambiada exitosamente.'},
+            'Tu clave de acceso ha sido actualizada correctamente.'
+        )
