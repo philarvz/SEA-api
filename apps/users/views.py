@@ -6,6 +6,10 @@ from django.contrib.auth import get_user_model
 from django.db import models
 
 from .permissions import IsAdmin
+
+# Constantes para mensajes de error
+MSG_USER_NOT_FOUND = 'Usuario no encontrado.'
+MSG_INVALID_DATA = 'Datos inválidos.'
 from .serializers import (
     RegisterUserSerializer, 
     UserResponseSerializer, 
@@ -125,7 +129,7 @@ class UserListCreateView(APIView):
         description=(
             'Crea un nuevo usuario (alumno, docente o administrador). '
             'Solo los administradores pueden acceder. '
-            'La contraseña se genera automáticamente y se envía al correo del usuario.'
+            'La clave se genera automáticamente y se envía al correo del usuario.'
         ),
     )
     def post(self, request):
@@ -134,7 +138,7 @@ class UserListCreateView(APIView):
             logger.warning(
                 'User registration rejected | errors={}', serializer.errors
             )
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
 
         try:
             user, _ = UserRegistrationService.register_user(serializer.validated_data)
@@ -230,7 +234,7 @@ class UserDetailView(APIView):
         user = self._get_user(pk)
         if not user:
             return error_response(
-                'Usuario no encontrado.',
+                MSG_USER_NOT_FOUND,
                 status_code=status.HTTP_404_NOT_FOUND
             )
         
@@ -258,7 +262,7 @@ class UserDetailView(APIView):
         user = self._get_user(pk)
         if not user:
             return error_response(
-                'Usuario no encontrado.',
+                MSG_USER_NOT_FOUND,
                 status_code=status.HTTP_404_NOT_FOUND
             )
         
@@ -272,7 +276,7 @@ class UserDetailView(APIView):
                 'User update rejected | user_id={} errors={}',
                 pk, serializer.errors
             )
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         
         try:
             updated_user = UserUpdateService.update_user(user, serializer.validated_data)
@@ -316,13 +320,13 @@ class UserStatusView(APIView):
             user = User.objects.get(pk=pk)
         except User.DoesNotExist:
             return error_response(
-                'Usuario no encontrado.',
+                MSG_USER_NOT_FOUND,
                 status_code=status.HTTP_404_NOT_FOUND
             )
         
         serializer = StatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
-            return error_response('Datos inválidos.', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
         
         new_status = serializer.validated_data['status']
         user.status = new_status

@@ -149,8 +149,8 @@ class UserRegistrationService:
             f"Tu cuenta en SEA ha sido creada exitosamente.\n\n"
             f"Usuario (matrícula): {user.username}\n"
             f"Correo: {user.email}\n"
-            f"Contraseña temporal: {plain_password}\n\n"
-            f"Por seguridad te recomendamos cambiar tu contraseña en tu perfil.\n\n"
+            f"Clave temporal: {plain_password}\n\n"
+            f"Por seguridad te recomendamos cambiar tu clave en tu perfil.\n\n"
             f"— Equipo SEA"
         )
 

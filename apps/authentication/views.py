@@ -15,6 +15,9 @@ from .serializers import LoginSerializer, TokenResponseSerializer, ChangePasswor
 from .services import AuthenticationService
 from utils.responses import success_response, error_response
 
+# Constante para mensaje de error
+MSG_INCORRECT_CREDENTIAL = 'Credencial incorrecta.'
+
 
 class LoginView(APIView):
     """
@@ -29,16 +32,16 @@ class LoginView(APIView):
             401: OpenApiResponse(description='Credenciales inválidas'),
             500: OpenApiResponse(description='Error interno del servidor'),
         },
-        description='Autenticar usuario con email y contraseña',
+        description='Autenticar usuario con email y credenciales',
         tags=['Authentication']
     )
     def post(self, request):
         """
-        Authenticate user with email and password
+        Authenticate user with email and credentials
         
         Request body:
             - email: User email
-            - password: User password
+            - password: User access key
             
         Response:
             - access: Access token
@@ -151,24 +154,24 @@ class HealthCheckView(APIView):
 
 class ChangePasswordView(APIView):
     """
-    Vista para cambiar la contraseña del usuario autenticado.
+    Vista para cambiar la clave de acceso del usuario autenticado.
     Requiere autenticación JWT.
-    El payload debe estar cifrado con AES-256-CBC.
+    El payload debe estar cifrado con AES-256-GCM.
     """
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        summary='Cambiar contraseña',
+        summary='Cambiar clave de acceso',
         tags=['Authentication'],
         request=ChangePasswordSerializer,
         responses={
-            200: OpenApiResponse(description='Contraseña cambiada exitosamente'),
+            200: OpenApiResponse(description='Clave cambiada exitosamente'),
             400: OpenApiResponse(description='Datos inválidos'),
-            401: OpenApiResponse(description='Contraseña actual incorrecta o no autenticado'),
+            401: OpenApiResponse(description='Clave actual incorrecta o no autenticado'),
         },
         description=(
-            'Permite al usuario autenticado cambiar su contraseña. '
-            'El payload debe estar cifrado usando AES-256-CBC. '
+            'Permite al usuario autenticado cambiar su clave de acceso. '
+            'El payload debe estar cifrado usando AES-256-GCM. '
             'Campos requeridos (cifrados): current_password, new_password, confirm_password.'
         ),
     )
@@ -188,7 +191,7 @@ class ChangePasswordView(APIView):
         
         if not serializer.is_valid():
             logger.warning(
-                'Password change validation failed | user={} errors={}',
+                'Access key change validation failed | user={} errors={}',
                 user.username, serializer.errors
             )
             return error_response('Datos inválidos.', serializer.errors)
@@ -198,25 +201,25 @@ class ChangePasswordView(APIView):
         current_password = decrypted_data.get('current_password')
         new_password = decrypted_data.get('new_password')
         
-        # Verificar que la contraseña actual sea correcta
+        # Verificar que la clave actual sea correcta
         if not user.check_password(current_password):
             logger.warning(
-                'Password change failed: incorrect current password | user={}',
+                'Access key change failed: incorrect current key | user={}',
                 user.username
             )
             return error_response(
-                'La contraseña actual es incorrecta.',
-                {'current_password': 'Contraseña incorrecta.'},
+                'La clave actual es incorrecta.',
+                {'current_password': MSG_INCORRECT_CREDENTIAL},
                 status_code=status.HTTP_401_UNAUTHORIZED
             )
         
-        # Cambiar la contraseña
+        # Cambiar la clave de acceso
         user.set_password(new_password)
         user.save()
         
-        logger.info('Password changed successfully | user={}', user.username)
+        logger.info('Access key changed successfully | user={}', user.username)
         
         return success_response(
-            {'message': 'Contraseña cambiada exitosamente.'},
-            'Tu contraseña ha sido actualizada correctamente.'
+            {'message': 'Clave cambiada exitosamente.'},
+            'Tu clave de acceso ha sido actualizada correctamente.'
         )

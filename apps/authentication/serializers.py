@@ -2,11 +2,18 @@ from rest_framework import serializers
 from apps.users.models import User
 from utils.crypto import crypto_service
 
+# Constantes para mensajes de error
+MSG_CURRENT_CREDENTIAL_REQUIRED = 'La clave actual es requerida.'
+MSG_NEW_CREDENTIAL_REQUIRED = 'La nueva clave es requerida.'
+MSG_CREDENTIAL_MIN_LENGTH = 'La nueva clave debe tener al menos 8 caracteres.'
+MSG_CREDENTIALS_NOT_MATCH = 'Las claves no coinciden.'
+MSG_CREDENTIAL_MUST_BE_DIFFERENT = 'La nueva clave debe ser diferente a la actual.'
+
 
 class LoginSerializer(serializers.Serializer):
     """
     Serializer for login requests.
-    Validates email and password.
+    Validates email and user credentials.
     """
     email = serializers.EmailField(required=True)
     password = serializers.CharField(required=True, write_only=True)
@@ -62,11 +69,11 @@ class UserSerializer(serializers.ModelSerializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     """
-    Serializer para cambio de contraseña.
+    Serializer para cambio de clave de acceso.
     Recibe un payload cifrado que contiene:
-    - current_password: Contraseña actual del usuario
-    - new_password: Nueva contraseña
-    - confirm_password: Confirmación de la nueva contraseña
+    - current_password: Clave actual del usuario
+    - new_password: Nueva clave
+    - confirm_password: Confirmación de la nueva clave
     """
     encrypted_data = serializers.CharField(required=True, write_only=True)
 
@@ -86,34 +93,34 @@ class ChangePasswordSerializer(serializers.Serializer):
             self.context['decrypted_data'] = decrypted
             
             return value
-        except ValueError as e:
+        except ValueError:
             raise serializers.ValidationError('Datos cifrados inválidos o corruptos.')
     
     def validate(self, attrs):
-        """Validaciones cruzadas de las contraseñas"""
+        """Validaciones cruzadas de las claves de acceso"""
         decrypted = self.context.get('decrypted_data', {})
         
         current_password = decrypted.get('current_password', '')
         new_password = decrypted.get('new_password', '')
         confirm_password = decrypted.get('confirm_password', '')
         
-        # Validar que las contraseñas no estén vacías
+        # Validar que las claves no estén vacías
         if not current_password:
-            raise serializers.ValidationError({'current_password': 'La contraseña actual es requerida.'})
+            raise serializers.ValidationError({'current_password': MSG_CURRENT_CREDENTIAL_REQUIRED})
         
         if not new_password:
-            raise serializers.ValidationError({'new_password': 'La nueva contraseña es requerida.'})
+            raise serializers.ValidationError({'new_password': MSG_NEW_CREDENTIAL_REQUIRED})
         
-        # Validar longitud mínima de la nueva contraseña
+        # Validar longitud mínima de la nueva clave
         if len(new_password) < 8:
-            raise serializers.ValidationError({'new_password': 'La nueva contraseña debe tener al menos 8 caracteres.'})
+            raise serializers.ValidationError({'new_password': MSG_CREDENTIAL_MIN_LENGTH})
         
-        # Validar que las contraseñas coincidan
+        # Validar que las claves coincidan
         if new_password != confirm_password:
-            raise serializers.ValidationError({'confirm_password': 'Las contraseñas no coinciden.'})
+            raise serializers.ValidationError({'confirm_password': MSG_CREDENTIALS_NOT_MATCH})
         
-        # Validar que la nueva contraseña sea diferente a la actual
+        # Validar que la nueva clave sea diferente a la actual
         if current_password == new_password:
-            raise serializers.ValidationError({'new_password': 'La nueva contraseña debe ser diferente a la actual.'})
+            raise serializers.ValidationError({'new_password': MSG_CREDENTIAL_MUST_BE_DIFFERENT})
         
         return attrs
