@@ -1,6 +1,7 @@
 from loguru import logger
 from rest_framework import status
 from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter
 from django.contrib.auth import get_user_model
 from django.db import models
@@ -15,9 +16,12 @@ from .serializers import (
     UserResponseSerializer, 
     UserListSerializer, 
     UpdateUserSerializer,
-    StatusUpdateSerializer
+    StatusUpdateSerializer,
+    RequestPasswordResetSerializer,
+    VerifyResetCodeSerializer,
+    ResetPasswordSerializer,
 )
-from .services import UserRegistrationService, UserUpdateService
+from .services import UserRegistrationService, UserUpdateService, PasswordRecoveryService
 from utils.responses import success_response, error_response
 from utils.pagination import GlobalPagination
 
@@ -344,3 +348,131 @@ class UserStatusView(APIView):
             },
             f'Usuario {state} exitosamente.',
         )
+
+
+# ---------------------------------------------------------------------------
+# Password Recovery Views
+# ---------------------------------------------------------------------------
+
+class RequestPasswordResetView(APIView):
+    """
+    Solicitar código de verificación para recuperación de contraseña
+    Endpoint: POST /api/users/password-recovery/request/
+    """
+    
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary='Solicitar código de recuperación de contraseña',
+        tags=['Recuperación de Contraseña'],
+        request=RequestPasswordResetSerializer,
+        responses={
+            200: OpenApiResponse(description='Código enviado exitosamente'),
+            400: OpenApiResponse(description='Datos inválidos'),
+            500: OpenApiResponse(description='Error al enviar el correo'),
+        },
+        description=(
+            'Envía un código de verificación de 6 dígitos al correo electrónico proporcionado. '
+            'El código expira en 15 minutos.'
+        ),
+    )
+    def post(self, request):
+        serializer = RequestPasswordResetSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(MSG_INVALID_DATA, serializer.errors)
+        
+        try:
+            result = PasswordRecoveryService.request_password_reset(
+                email=serializer.validated_data['email']
+            )
+            return success_response(result, result['message'])
+        except Exception as e:
+            logger.error(f'Error in password reset request: {e}')
+            return error_response(
+                str(e),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class VerifyResetCodeView(APIView):
+    """
+    Verificar código de recuperación de contraseña
+    Endpoint: POST /api/users/password-recovery/verify/
+    """
+    
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary='Verificar código de recuperación',
+        tags=['Recuperación de Contraseña'],
+        request=VerifyResetCodeSerializer,
+        responses={
+            200: OpenApiResponse(description='Código válido'),
+            400: OpenApiResponse(description='Código inválido o expirado'),
+        },
+        description=(
+            'Verifica si el código de 6 dígitos es válido y no ha expirado.'
+        ),
+    )
+    def post(self, request):
+        serializer = VerifyResetCodeSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(MSG_INVALID_DATA, serializer.errors)
+        
+        try:
+            result = PasswordRecoveryService.verify_reset_code(
+                email=serializer.validated_data['email'],
+                code=serializer.validated_data['code']
+            )
+            return success_response(result, result['message'])
+        except ValueError as e:
+            return error_response(str(e), status_code=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f'Error verifying reset code: {e}')
+            return error_response(
+                'Error al verificar el código.',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ResetPasswordView(APIView):
+    """
+    Restablecer contraseña con código verificado
+    Endpoint: POST /api/users/password-recovery/reset/
+    """
+    
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary='Restablecer contraseña',
+        tags=['Recuperación de Contraseña'],
+        request=ResetPasswordSerializer,
+        responses={
+            200: OpenApiResponse(description='Contraseña restablecida exitosamente'),
+            400: OpenApiResponse(description='Datos inválidos o código expirado'),
+        },
+        description=(
+            'Restablece la contraseña del usuario después de verificar el código. '
+            'El código se marca como usado y no puede reutilizarse.'
+        ),
+    )
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(MSG_INVALID_DATA, serializer.errors)
+        
+        try:
+            result = PasswordRecoveryService.reset_password(
+                email=serializer.validated_data['email'],
+                code=serializer.validated_data['code'],
+                new_password=serializer.validated_data['new_password']
+            )
+            return success_response(result, result['message'])
+        except ValueError as e:
+            return error_response(str(e), status_code=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f'Error resetting password: {e}')
+            return error_response(
+                'Error al restablecer la contraseña.',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
