@@ -18,7 +18,7 @@ class RegisterUserSerializer(serializers.Serializer):
     first_name = serializers.CharField(max_length=150, required=True)
     last_name = serializers.CharField(max_length=150, required=True)
     email = serializers.EmailField(required=True)
-    matricula = serializers.CharField(max_length=20, required=True)
+    matricula = serializers.CharField(max_length=20, required=False, allow_blank=True, allow_null=True)
     role = serializers.ChoiceField(choices=User.ROLE_CHOICES)
     # Status siempre True, se envía pero no se usa desde el cliente
     status = serializers.BooleanField(default=True, required=False)
@@ -43,6 +43,8 @@ class RegisterUserSerializer(serializers.Serializer):
         return value
 
     def validate_matricula(self, value: str) -> str:
+        if not value:
+            return ''
         value = value.strip()
         if User.objects.filter(matricula=value).exists():
             raise serializers.ValidationError('La matrícula ya está registrada.')
@@ -62,6 +64,13 @@ class RegisterUserSerializer(serializers.Serializer):
         role = attrs.get('role')
         id_group = attrs.get('id_group')
         subject_ids = attrs.get('subject_ids', [])
+        matricula = attrs.get('matricula')
+
+        # Validar que estudiantes y docentes tengan matrícula
+        if role in ['student', 'teacher'] and not matricula:
+            raise serializers.ValidationError(
+                {'matricula': 'La matrícula es requerida para estudiantes y docentes.'}
+            )
 
         if role == 'student' and id_group:
             from apps.academic.models import Group
@@ -118,6 +127,8 @@ class UpdateUserSerializer(serializers.Serializer):
 
     def validate_matricula(self, value: str) -> str:
         """Validar que la matrícula no esté en uso por otro usuario"""
+        if not value:
+            return ''
         value = value.strip()
         user_id = self.context.get('user_id')
         if User.objects.filter(matricula=value).exclude(id_user=user_id).exists():
@@ -285,3 +296,58 @@ class UserListSerializer(serializers.ModelSerializer):
             except Exception:
                 pass
         return []
+
+
+# ---------------------------------------------------------------------------
+# Password Recovery Serializers
+# ---------------------------------------------------------------------------
+
+class RequestPasswordResetSerializer(serializers.Serializer):
+    """Serializer para solicitar código de recuperación de contraseña"""
+    email = serializers.EmailField(required=True)
+
+    def validate_email(self, value: str) -> str:
+        value = value.lower().strip()
+        if not User.objects.filter(email__iexact=value, is_active=True).exists():
+            raise serializers.ValidationError(
+                'No existe una cuenta activa asociada a este correo electrónico.'
+            )
+        return value
+
+
+class VerifyResetCodeSerializer(serializers.Serializer):
+    """Serializer para verificar código de recuperación"""
+    email = serializers.EmailField(required=True)
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+
+    def validate_email(self, value: str) -> str:
+        return value.lower().strip()
+
+    def validate_code(self, value: str) -> str:
+        return value.strip().upper()
+
+
+class ResetPasswordSerializer(serializers.Serializer):
+    """Serializer para restablecer contraseña con código verificado"""
+    # Constantes para nombres de campos
+    FIELD_NEW_PWD = 'new_password'
+    FIELD_CONFIRM_PWD = 'confirm_password'
+    MSG_MISMATCH = 'Las claves no coinciden.'
+    
+    email = serializers.EmailField(required=True)
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+    new_password = serializers.CharField(min_length=8, max_length=128, required=True)
+    confirm_password = serializers.CharField(min_length=8, max_length=128, required=True)
+
+    def validate_email(self, value: str) -> str:
+        return value.lower().strip()
+
+    def validate_code(self, value: str) -> str:
+        return value.strip().upper()
+
+    def validate(self, attrs: dict) -> dict:
+        if attrs[self.FIELD_NEW_PWD] != attrs[self.FIELD_CONFIRM_PWD]:
+            raise serializers.ValidationError(
+                {self.FIELD_CONFIRM_PWD: self.MSG_MISMATCH}
+            )
+        return attrs
