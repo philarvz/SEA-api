@@ -252,16 +252,22 @@ SPECTACULAR_SETTINGS = {
         'persistAuthorization': True,
         'displayOperationId': True,
     },
+    # Configuración de seguridad para JWT
     'SECURITY': [{'bearerAuth': []}],
-    'COMPONENTS': {
+    'APPEND_COMPONENTS': {
         'securitySchemes': {
             'bearerAuth': {
                 'type': 'http',
                 'scheme': 'bearer',
                 'bearerFormat': 'JWT',
+                'description': 'JWT Authorization header using the Bearer scheme. Example: "Bearer {token}"'
             }
         }
     },
+    # Especificar explícitamente que AuditJWTAuthentication usa el esquema bearerAuth
+    'AUTHENTICATION_WHITELIST': [
+        'apps.audit.authentication.AuditJWTAuthentication',
+    ],
 }
 
 LOGGING_CONFIG = None
