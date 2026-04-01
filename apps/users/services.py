@@ -294,7 +294,7 @@ class PasswordRecoveryService:
         expires_at = timezone.now() + timedelta(minutes=15)
         
         # Crear registro del código
-        reset_code = PasswordResetCode.objects.create(
+        PasswordResetCode.objects.create(
             user=user,
             code=code,
             expires_at=expires_at
@@ -306,7 +306,7 @@ class PasswordRecoveryService:
             logger.info(f'Password reset code sent to {email}')
         except Exception as e:
             logger.error(f'Failed to send reset code email to {email}: {e}')
-            raise Exception('Error al enviar el correo electrónico. Inténtalo de nuevo.')
+            raise RuntimeError('Error al enviar el correo electrónico. Inténtalo de nuevo.')
 
         return {
             'message': 'Código de verificación enviado a tu correo electrónico.',

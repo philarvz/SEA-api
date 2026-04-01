@@ -44,7 +44,7 @@ class RegisterUserSerializer(serializers.Serializer):
 
     def validate_matricula(self, value: str) -> str:
         if not value:
-            return None
+            return ''
         value = value.strip()
         if User.objects.filter(matricula=value).exists():
             raise serializers.ValidationError('La matrícula ya está registrada.')
@@ -128,7 +128,7 @@ class UpdateUserSerializer(serializers.Serializer):
     def validate_matricula(self, value: str) -> str:
         """Validar que la matrícula no esté en uso por otro usuario"""
         if not value:
-            return None
+            return ''
         value = value.strip()
         user_id = self.context.get('user_id')
         if User.objects.filter(matricula=value).exclude(id_user=user_id).exists():
@@ -329,6 +329,11 @@ class VerifyResetCodeSerializer(serializers.Serializer):
 
 class ResetPasswordSerializer(serializers.Serializer):
     """Serializer para restablecer contraseña con código verificado"""
+    # Constantes para nombres de campos
+    FIELD_NEW_PWD = 'new_password'
+    FIELD_CONFIRM_PWD = 'confirm_password'
+    MSG_MISMATCH = 'Las claves no coinciden.'
+    
     email = serializers.EmailField(required=True)
     code = serializers.CharField(min_length=6, max_length=6, required=True)
     new_password = serializers.CharField(min_length=8, max_length=128, required=True)
@@ -341,8 +346,8 @@ class ResetPasswordSerializer(serializers.Serializer):
         return value.strip().upper()
 
     def validate(self, attrs: dict) -> dict:
-        if attrs['new_password'] != attrs['confirm_password']:
+        if attrs[self.FIELD_NEW_PWD] != attrs[self.FIELD_CONFIRM_PWD]:
             raise serializers.ValidationError(
-                {'confirm_password': 'Las contraseñas no coinciden.'}
+                {self.FIELD_CONFIRM_PWD: self.MSG_MISMATCH}
             )
         return attrs
