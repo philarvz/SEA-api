@@ -214,3 +214,30 @@ class ExamAssignmentService:
             'created': created,
             'skipped': skipped,
         }
+
+    @staticmethod
+    def get_student_assignments(student_pk, params: dict):
+        """
+        Return queryset of assignments for a single student.
+        Optimised with select_related to avoid N+1.
+        Optional filters: status (str|None), include_completed (bool).
+        Expects params already validated by MyAssignmentQuerySerializer.
+        """
+        queryset = ExamAssignment.objects.select_related(
+            'exam', 'exam__id_subject', 'group', 'group__id_generation',
+        ).filter(
+            student_id=student_pk,
+            exam__status=True,          # only active exams
+        )
+
+        # include_completed is a validated bool (default False) from the serializer
+        include_completed = params.get('include_completed', False)
+        if not include_completed:
+            queryset = queryset.exclude(status='completed')
+
+        # status is a validated ChoiceField value (or None)
+        status_param = params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+
+        return queryset

@@ -154,6 +154,16 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.JSONParser',
     ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    # CWE-770 / OWASP API4 — rate limiting to prevent brute-force and DoS
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': config('THROTTLE_ANON_RATE', default='30/minute'),
+        'user': config('THROTTLE_USER_RATE', default='120/minute'),
+        'student_assignments': config('THROTTLE_STUDENT_RATE', default='60/minute'),
+    },
 }
 
 

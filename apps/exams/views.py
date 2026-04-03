@@ -18,6 +18,8 @@ from drf_spectacular.types import OpenApiTypes
 import openpyxl
 from openpyxl.styles import Font, Alignment
 
+from rest_framework.throttling import UserRateThrottle
+
 from .models import Exam
 from .serializers import (
     ExamSerializer,
@@ -26,9 +28,11 @@ from .serializers import (
     ExamStatusSerializer,
     ExamSecureModeSerializer,
     ExamAssignSerializer,
+    MyAssignmentSerializer,
+    MyAssignmentQuerySerializer,
 )
 from .services import ExamService, ExamAssignmentService
-from apps.academic.permissions import IsTeacherOrAdmin
+from apps.academic.permissions import IsTeacherOrAdmin, IsStudent
 from utils.responses import success_response, error_response
 
 
@@ -450,3 +454,64 @@ class ExamAssignView(APIView):
             'Examen asignado exitosamente.',
             status.HTTP_201_CREATED,
         )
+
+
+# ---------------------------------------------------------------------------
+# Student: My Assignments
+# ---------------------------------------------------------------------------
+
+class _StudentAssignmentThrottle(UserRateThrottle):
+    """Dedicated throttle scope for student assignment listing."""
+    scope = 'student_assignments'
+
+
+class MyAssignmentsView(APIView):
+    """GET /exam-assignments/my-assignments — student's own exam list."""
+    permission_classes = [IsStudent]
+    throttle_classes = [_StudentAssignmentThrottle]
+
+    @extend_schema(
+        summary='Mis asignaciones de exámenes',
+        tags=['Asignaciones de Exámenes'],
+        parameters=[
+            OpenApiParameter(
+                'status', OpenApiTypes.STR,
+                description='Filtrar por estado (pending, in_progress, completed)',
+                required=False,
+            ),
+            OpenApiParameter(
+                'include_completed', OpenApiTypes.BOOL,
+                description='Incluir asignaciones completadas (default: false)',
+                required=False,
+            ),
+        ],
+        responses={
+            200: MyAssignmentSerializer(many=True),
+            400: OpenApiResponse(description='Parámetros inválidos'),
+            403: OpenApiResponse(description='No es alumno'),
+        },
+    )
+    def get(self, request):
+        # Rule 1: validate all query-param inputs through a serializer
+        query_serializer = MyAssignmentQuerySerializer(data=request.query_params)
+        if not query_serializer.is_valid():
+            return error_response(MSG_INVALID_DATA, query_serializer.errors)
+
+        try:
+            queryset = ExamAssignmentService.get_student_assignments(
+                student_pk=request.user.pk,
+                params=query_serializer.validated_data,
+            )
+            # Evaluate count before serialization to keep a single DB round-trip
+            count = queryset.count()
+            serializer = MyAssignmentSerializer(queryset, many=True)
+        except Exception:  # noqa: BLE001
+            # Rule 9: never expose internal error details to the client
+            logger.exception('Unexpected error listing assignments | student={}', request.user.pk)
+            return error_response(
+                'Error al obtener las asignaciones.',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        logger.info('Student assignments listed | student={} count={}', request.user.pk, count)
+        return success_response(serializer.data)

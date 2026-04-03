@@ -12,6 +12,7 @@ from .views import (
     ExamDeleteView,
     QuestionTemplateDownloadView,
     ExamAssignView,
+    MyAssignmentsView,
 )
 
 app_name = 'exams'
@@ -30,6 +31,7 @@ urlpatterns = [
     # Exam assignments
     # ------------------------------------------------------------------
     path('exam-assignments/assign/', ExamAssignView.as_view(), name='exam-assign'),
+    path('exam-assignments/my-assignments/', MyAssignmentsView.as_view(), name='my-assignments'),
 
     # ------------------------------------------------------------------
     # Template download (existing)

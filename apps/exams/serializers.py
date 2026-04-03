@@ -246,3 +246,75 @@ class ExamAssignmentOutputSerializer(serializers.ModelSerializer):
 
     def get_group_name(self, obj):
         return str(obj.group)
+
+
+# ---------------------------------------------------------------------------
+# Student "My Assignments" serializer
+# ---------------------------------------------------------------------------
+
+class MyAssignmentSerializer(serializers.ModelSerializer):
+    """
+    Read-only serializer for the student's assignment list.
+    Includes exam context, subject info, computed availability flags.
+    """
+    exam_name = serializers.CharField(source='exam.name', read_only=True)
+    exam_title = serializers.CharField(source='exam.title', read_only=True)
+    subject_name = serializers.CharField(source='exam.id_subject.name', read_only=True)
+    unit_number = serializers.IntegerField(source='exam.unit_number', read_only=True)
+    difficulty_level = serializers.CharField(source='exam.difficulty_level', read_only=True)
+    difficulty_label = serializers.CharField(
+        source='exam.get_difficulty_level_display', read_only=True,
+    )
+    secure_mode = serializers.BooleanField(source='exam.secure_mode', read_only=True)
+    group_label = serializers.SerializerMethodField()
+    is_available = serializers.SerializerMethodField()
+    is_expired = serializers.SerializerMethodField()
+    can_start = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ExamAssignment
+        fields = [
+            'id_assignment',
+            'exam_id', 'exam_name', 'exam_title',
+            'subject_name', 'unit_number',
+            'difficulty_level', 'difficulty_label',
+            'secure_mode',
+            'group_id', 'group_label',
+            'status', 'score', 'is_passed',
+            'assigned_at', 'available_from', 'available_to',
+            'attempt_date',
+            'is_available', 'is_expired', 'can_start',
+        ]
+        read_only_fields = fields
+
+    def get_group_label(self, obj):
+        return str(obj.group)
+
+    def get_is_available(self, obj):
+        now = timezone.now()
+        return obj.available_from <= now <= obj.available_to
+
+    def get_is_expired(self, obj):
+        return timezone.now() > obj.available_to
+
+    def get_can_start(self, obj):
+        now = timezone.now()
+        within_window = obj.available_from <= now <= obj.available_to
+        return within_window and obj.status in ('pending', 'in_progress')
+
+
+# ---------------------------------------------------------------------------
+# Query-param input serializer for my-assignments (Rule 1: validate all inputs)
+# ---------------------------------------------------------------------------
+
+class MyAssignmentQuerySerializer(serializers.Serializer):
+    """Validates the query parameters accepted by MyAssignmentsView."""
+    VALID_STATUSES = ('pending', 'in_progress', 'completed')
+
+    status = serializers.ChoiceField(
+        choices=VALID_STATUSES,
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    include_completed = serializers.BooleanField(required=False, default=False)
