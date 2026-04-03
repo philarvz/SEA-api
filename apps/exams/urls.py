@@ -1,12 +1,30 @@
 """
 Exams URL Configuration
+Base path: /api/exams/
 """
 
 from django.urls import path
-from .views import QuestionTemplateDownloadView
+from .views import (
+    ExamListCreateView,
+    ExamDetailView,
+    ExamStatusView,
+    ExamDeleteView,
+    QuestionTemplateDownloadView,
+)
 
 app_name = 'exams'
 
 urlpatterns = [
+    # ------------------------------------------------------------------
+    # Exam CRUD endpoints
+    # ------------------------------------------------------------------
+    path('', ExamListCreateView.as_view(), name='exam-list-create'),
+    path('<int:pk>/', ExamDetailView.as_view(), name='exam-detail'),
+    path('<int:pk>/status/', ExamStatusView.as_view(), name='exam-status'),
+    path('<int:pk>/delete/', ExamDeleteView.as_view(), name='exam-delete'),
+
+    # ------------------------------------------------------------------
+    # Template download (existing)
+    # ------------------------------------------------------------------
     path('template/download/', QuestionTemplateDownloadView.as_view(), name='question-template-download'),
 ]

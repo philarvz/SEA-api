@@ -5,13 +5,24 @@ Note: id_teacher and id_person now reference users.User (AbstractUser)
 """
 
 from django.db import models
+from django.core.exceptions import ValidationError
 
 
 class Exam(models.Model):
     """
-    Model representing an exam
+    Model representing an exam.
+    An exam is created over a subject, a valid unit within that subject,
+    and a difficulty level.  This base configuration is later populated
+    with questions and assigned to students.
     """
+    DIFFICULTY_CHOICES = [
+        ('easy', 'Fácil'),
+        ('medium', 'Medio'),
+        ('hard', 'Difícil'),
+    ]
+
     id_exam = models.AutoField(primary_key=True, db_column='id_exam')
+    name = models.CharField(max_length=200, db_column='name', default='')
     id_subject = models.ForeignKey(
         'academic.Subject',
         on_delete=models.RESTRICT,
@@ -25,9 +36,18 @@ class Exam(models.Model):
         related_name='created_exams'
     )
     title = models.CharField(max_length=200)
+    unit_number = models.PositiveIntegerField(db_column='unit_number', default=1)
+    difficulty_level = models.CharField(
+        max_length=20,
+        choices=DIFFICULTY_CHOICES,
+        default='medium',
+        db_column='difficulty_level',
+    )
     secure_mode = models.BooleanField(default=False, db_column='secure_mode')
     creation_date = models.DateField(db_column='creation_date')
     status = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column='created_at', null=True)
+    updated_at = models.DateTimeField(auto_now=True, db_column='updated_at', null=True)
 
     class Meta:
         db_table = 'exam'
@@ -35,8 +55,24 @@ class Exam(models.Model):
         verbose_name_plural = 'Exams'
         ordering = ['-creation_date']
 
+    def clean(self):
+        """Validate that unit_number is within the subject's unit range."""
+        if self.id_subject_id:
+            max_units = self.id_subject.units.count()
+            if max_units > 0 and self.unit_number > max_units:
+                raise ValidationError({
+                    'unit_number': (
+                        f'La unidad {self.unit_number} excede el número de unidades '
+                        f'de la materia ({max_units}).'
+                    )
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return self.title
+        return self.name or self.title
 
 
 class ExamQuestion(models.Model):
