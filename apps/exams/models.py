@@ -156,3 +156,65 @@ class ExamPerson(models.Model):
 
     def __str__(self):
         return f"{self.id_person.full_name} - {self.id_exam.title}"
+
+
+class ExamAssignment(models.Model):
+    """
+    Represents the assignment of an exam to an individual student,
+    generated when a teacher assigns an exam to one or more groups.
+    Each record tracks the student's exam lifecycle: availability window,
+    attempt status, score and pass/fail result.
+    """
+    ASSIGNMENT_STATUS_CHOICES = [
+        ('pending', 'Pendiente'),
+        ('in_progress', 'En Progreso'),
+        ('completed', 'Completado'),
+    ]
+
+    id_assignment = models.AutoField(primary_key=True, db_column='id')
+    exam = models.ForeignKey(
+        Exam,
+        on_delete=models.CASCADE,
+        db_column='exam_id',
+        related_name='exam_assignments',
+    )
+    student = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        db_column='student_id',
+        related_name='exam_assignments',
+    )
+    group = models.ForeignKey(
+        'academic.Group',
+        on_delete=models.RESTRICT,
+        db_column='group_id',
+        related_name='exam_assignments',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=ASSIGNMENT_STATUS_CHOICES,
+        default='pending',
+        db_column='status',
+    )
+    score = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True, db_column='score',
+    )
+    is_passed = models.BooleanField(null=True, blank=True, db_column='is_passed')
+    assigned_at = models.DateTimeField(db_column='assigned_at')
+    available_from = models.DateTimeField(db_column='available_from')
+    available_to = models.DateTimeField(db_column='available_to')
+    attempt_date = models.DateTimeField(
+        null=True, blank=True, db_column='attempt_date',
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column='created_at')
+    updated_at = models.DateTimeField(auto_now=True, db_column='updated_at')
+
+    class Meta:
+        db_table = 'exam_assignment'
+        verbose_name = 'Exam Assignment'
+        verbose_name_plural = 'Exam Assignments'
+        unique_together = [['exam', 'student']]
+        ordering = ['-assigned_at']
+
+    def __str__(self):
+        return f"Exam {self.exam_id} → Student {self.student_id} (Group {self.group_id})"

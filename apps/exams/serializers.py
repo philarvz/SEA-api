@@ -6,8 +6,8 @@ Covers: Exam CRUD operations with academic validation.
 from rest_framework import serializers
 from django.utils import timezone
 
-from .models import Exam
-from apps.academic.models import Subject, Unit
+from .models import Exam, ExamAssignment
+from apps.academic.models import Subject, Unit, Group
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +163,77 @@ class ExamUpdateSerializer(serializers.Serializer):
 class ExamStatusSerializer(serializers.Serializer):
     """Input serializer for PATCH /exams/{id}/status/."""
     status = serializers.BooleanField(required=True)
+
+
+# ---------------------------------------------------------------------------
+# Exam Assignment serializers
+# ---------------------------------------------------------------------------
+
+class ExamAssignSerializer(serializers.Serializer):
+    """
+    Input serializer for POST /exam-assignments/assign.
+    Validates the payload for bulk-assigning an exam to groups.
+    """
+    exam_id = serializers.IntegerField(required=True)
+    group_ids = serializers.ListField(
+        child=serializers.IntegerField(), required=True, allow_empty=False,
+    )
+    available_from = serializers.DateTimeField(required=True)
+    available_to = serializers.DateTimeField(required=True)
+
+    def validate_exam_id(self, value):
+        try:
+            exam = Exam.objects.get(pk=value)
+        except Exam.DoesNotExist:
+            raise serializers.ValidationError('El examen especificado no existe.')
+        if not exam.status:
+            raise serializers.ValidationError('El examen especificado está inactivo.')
+        self.context['_exam'] = exam
+        return value
+
+    def validate_group_ids(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError('Se enviaron IDs de grupo duplicados.')
+
+        groups = Group.objects.filter(pk__in=value)
+        found_ids = set(groups.values_list('pk', flat=True))
+        missing = set(value) - found_ids
+        if missing:
+            raise serializers.ValidationError(
+                f'Los siguientes grupos no existen: {sorted(missing)}'
+            )
+
+        self.context['_groups'] = list(groups)
+        return value
+
+    def validate(self, attrs):
+        if attrs['available_from'] >= attrs['available_to']:
+            raise serializers.ValidationError({
+                'available_to': 'La fecha de cierre debe ser posterior a la de apertura.',
+            })
+        return attrs
+
+
+class ExamAssignmentOutputSerializer(serializers.ModelSerializer):
+    """Read-only serializer for exam assignment records."""
+    exam_name = serializers.CharField(source='exam.name', read_only=True)
+    student_name = serializers.SerializerMethodField()
+    group_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ExamAssignment
+        fields = [
+            'id_assignment', 'exam_id', 'exam_name',
+            'student_id', 'student_name',
+            'group_id', 'group_name',
+            'status', 'score', 'is_passed',
+            'assigned_at', 'available_from', 'available_to',
+            'attempt_date', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_student_name(self, obj):
+        return f"{obj.student.first_name} {obj.student.last_name}"
+
+    def get_group_name(self, obj):
+        return str(obj.group)

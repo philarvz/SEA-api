@@ -7,9 +7,9 @@ from loguru import logger
 from django.utils import timezone
 from django.db.models import Q
 
-from .models import Exam
+from .models import Exam, ExamAssignment
 from apps.academic.models import Subject
-from apps.users.models import User
+from apps.users.models import User, StudentProfile
 
 
 class ExamService:
@@ -116,3 +116,92 @@ class ExamService:
             )
 
         return queryset
+
+
+class ExamAssignmentService:
+    """Business logic for bulk exam-to-group assignments."""
+
+    @staticmethod
+    def assign_exam_to_groups(
+        exam, groups, available_from, available_to, teacher_pk,
+    ) -> dict:
+        """
+        Assign *exam* to every active student in the given *groups*.
+
+        Returns a summary dict:
+            total_students  – active students found across all groups
+            created         – new ExamAssignment records inserted
+            skipped         – duplicates that already existed
+        """
+        now = timezone.now()
+
+        # Collect active students per group
+        # StudentProfile.group is a FK to Group; the student's User must be active.
+        student_profiles = StudentProfile.objects.filter(
+            group__in=groups,
+            user__is_active=True,
+            user__status=True,
+            user__role='student',
+        ).select_related('user', 'group')
+
+        # Build list of (student_user_id, group_id)
+        student_group_pairs = [
+            (sp.user_id, sp.group_id) for sp in student_profiles
+        ]
+
+        total_students = len(student_group_pairs)
+
+        if total_students == 0:
+            logger.info(
+                'Exam assignment skipped — no active students | exam={} groups={}',
+                exam.pk, [g.pk for g in groups],
+            )
+            return {'total_students': 0, 'created': 0, 'skipped': 0}
+
+        # Detect existing assignments to avoid duplicates
+        existing_pairs = set(
+            ExamAssignment.objects.filter(
+                exam=exam,
+                student_id__in=[uid for uid, _ in student_group_pairs],
+            ).values_list('student_id', flat=True)
+        )
+
+        new_assignments = []
+        skipped = 0
+
+        for student_id, group_id in student_group_pairs:
+            if student_id in existing_pairs:
+                skipped += 1
+                continue
+
+            new_assignments.append(ExamAssignment(
+                exam=exam,
+                student_id=student_id,
+                group_id=group_id,
+                status='pending',
+                score=None,
+                is_passed=None,
+                assigned_at=now,
+                available_from=available_from,
+                available_to=available_to,
+                attempt_date=None,
+            ))
+            # Mark as seen so intra-batch duplicates (same student in
+            # two groups) are also handled.
+            existing_pairs.add(student_id)
+
+        if new_assignments:
+            ExamAssignment.objects.bulk_create(new_assignments)
+
+        created = len(new_assignments)
+
+        logger.info(
+            'Exam assigned | exam={} groups={} total={} created={} skipped={} teacher={}',
+            exam.pk, [g.pk for g in groups], total_students, created, skipped, teacher_pk,
+        )
+
+        return {
+            'total_students': total_students,
+            'created': created,
+            'skipped': skipped,
+        }

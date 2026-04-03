@@ -24,8 +24,9 @@ from .serializers import (
     ExamCreateSerializer,
     ExamUpdateSerializer,
     ExamStatusSerializer,
+    ExamAssignSerializer,
 )
-from .services import ExamService
+from .services import ExamService, ExamAssignmentService
 from apps.academic.permissions import IsTeacherOrAdmin
 from utils.responses import success_response, error_response
 
@@ -359,3 +360,55 @@ class QuestionTemplateDownloadView(APIView):
         buffer.close()
 
         return response
+
+
+# ---------------------------------------------------------------------------
+# Exam assignment to groups
+# ---------------------------------------------------------------------------
+
+class ExamAssignView(APIView):
+    """POST /exam-assignments/assign — assign an exam to groups."""
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Asignar examen a grupos',
+        tags=['Asignaciones de Exámenes'],
+        request=ExamAssignSerializer,
+        responses={
+            201: OpenApiResponse(description='Asignación exitosa'),
+            400: OpenApiResponse(description='Error de validación'),
+            404: OpenApiResponse(description='Examen o grupos no encontrados'),
+        },
+    )
+    def post(self, request):
+        serializer = ExamAssignSerializer(data=request.data)
+        if not serializer.is_valid():
+            logger.warning('Exam assignment rejected | errors={}', serializer.errors)
+            return error_response(MSG_INVALID_DATA, serializer.errors)
+
+        exam = serializer.context['_exam']
+        groups = serializer.context['_groups']
+
+        # Ownership: teachers can only assign their own exams
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        summary = ExamAssignmentService.assign_exam_to_groups(
+            exam=exam,
+            groups=groups,
+            available_from=serializer.validated_data['available_from'],
+            available_to=serializer.validated_data['available_to'],
+            teacher_pk=request.user.pk,
+        )
+
+        if summary['total_students'] == 0:
+            return error_response(
+                'Los grupos seleccionados no tienen alumnos activos.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return success_response(
+            summary,
+            'Examen asignado exitosamente.',
+            status.HTTP_201_CREATED,
+        )
