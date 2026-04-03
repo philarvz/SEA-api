@@ -11,10 +11,72 @@ from apps.academic.models import Subject, Unit, Group
 
 
 # ---------------------------------------------------------------------------
-# Student grades per group (for the grades view)
+# Private helpers / mixins
 # ---------------------------------------------------------------------------
 
 STATUS_LABELS = dict(ExamAssignment.ASSIGNMENT_STATUS_CHOICES)
+
+
+def _get_unit_name_from_db(id_subject, unit_number):
+    """Query unit name for a subject + unit_number. Used by non-prefetched serializers."""
+    unit = Unit.objects.filter(id_subject=id_subject, unit_number=unit_number).first()
+    return unit.unit_name if unit else None
+
+
+class _ExamSubjectUnitValidatorMixin:
+    """
+    Shared input-validation logic for Exam create/update serializers.
+    Eliminates duplication between ExamCreateSerializer and ExamUpdateSerializer.
+
+    Provides:
+      - validate_name       — strip whitespace
+      - validate_id_subject — existence + active check, caches subject in context
+      - validate            — unit_number range + existence check within subject
+    """
+
+    def validate_name(self, value):
+        return value.strip()
+
+    def validate_id_subject(self, value):
+        try:
+            subject = Subject.objects.prefetch_related('units').get(pk=value)
+        except Subject.DoesNotExist:
+            raise serializers.ValidationError('La materia especificada no existe.')
+        if not subject.status:
+            raise serializers.ValidationError('La materia especificada está inactiva.')
+        self.context['_subject'] = subject
+        return value
+
+    def validate(self, attrs):
+        subject = self.context.get('_subject')
+        if not subject:
+            return attrs
+
+        unit_number = attrs.get('unit_number')
+        max_units = subject.units.count()
+
+        if max_units > 0 and unit_number > max_units:
+            raise serializers.ValidationError({
+                'unit_number': (
+                    f'La unidad {unit_number} excede el número de unidades '
+                    f'de la materia "{subject.name}" ({max_units}).'
+                )
+            })
+
+        if max_units > 0 and not subject.units.filter(unit_number=unit_number).exists():
+            raise serializers.ValidationError({
+                'unit_number': (
+                    f'No existe la unidad {unit_number} registrada '
+                    f'en la materia "{subject.name}".'
+                )
+            })
+
+        return attrs
+
+
+# ---------------------------------------------------------------------------
+# Student grades per group (grades view)
+# ---------------------------------------------------------------------------
 
 
 class GroupStudentGradeSerializer(serializers.ModelSerializer):
@@ -39,19 +101,40 @@ class GroupStudentGradeSerializer(serializers.ModelSerializer):
 
 
 # ---------------------------------------------------------------------------
-# Output serializer (read operations)
+# Output serializers (read operations)
 # ---------------------------------------------------------------------------
 
-class ExamSerializer(serializers.ModelSerializer):
-    """Read-only serializer for listing/detail responses."""
+class _BaseExamOutputSerializer(serializers.ModelSerializer):
+    """
+    Common read-only fields shared by all Exam output serializers.
+    Subclasses extend with role-specific fields (e.g. teacher_name).
+    """
     subject_name = serializers.CharField(source='id_subject.name', read_only=True)
     subject_level = serializers.IntegerField(source='id_subject.level_number', read_only=True)
-    teacher_name = serializers.SerializerMethodField()
     difficulty_label = serializers.CharField(source='get_difficulty_level_display', read_only=True)
     unit_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Exam
+        fields = [
+            'id_exam', 'name', 'title',
+            'id_subject', 'subject_name', 'subject_level',
+            'unit_number', 'unit_name',
+            'difficulty_level', 'difficulty_label',
+            'secure_mode', 'minimum_score', 'creation_date', 'status',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_unit_name(self, obj):
+        return _get_unit_name_from_db(obj.id_subject, obj.unit_number)
+
+
+class ExamSerializer(_BaseExamOutputSerializer):
+    """Read-only serializer for listing/detail responses (includes teacher info)."""
+    teacher_name = serializers.SerializerMethodField()
+
+    class Meta(_BaseExamOutputSerializer.Meta):
         fields = [
             'id_exam', 'name', 'title',
             'id_subject', 'subject_name', 'subject_level',
@@ -66,42 +149,15 @@ class ExamSerializer(serializers.ModelSerializer):
     def get_teacher_name(self, obj):
         return f"{obj.id_teacher.first_name} {obj.id_teacher.last_name}"
 
-    def get_unit_name(self, obj):
-        unit = Unit.objects.filter(
-            id_subject=obj.id_subject, unit_number=obj.unit_number
-        ).first()
-        return unit.unit_name if unit else None
 
-
-# ---------------------------------------------------------------------------
-# Created-by-me serializer (no teacher fields — they are the requester)
-# ---------------------------------------------------------------------------
-
-class CreatedByMeExamSerializer(serializers.ModelSerializer):
+class CreatedByMeExamSerializer(_BaseExamOutputSerializer):
     """
     Read-only serializer for GET /exams/created-by-me.
     Omits teacher fields (caller is always the creator).
-    Resolves unit_name from prefetched units to avoid N+1.
+    Overrides get_unit_name to use prefetched units (avoids N+1).
     """
-    subject_name = serializers.CharField(source='id_subject.name', read_only=True)
-    subject_level = serializers.IntegerField(source='id_subject.level_number', read_only=True)
-    difficulty_label = serializers.CharField(source='get_difficulty_level_display', read_only=True)
-    unit_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Exam
-        fields = [
-            'id_exam', 'name', 'title',
-            'id_subject', 'subject_name', 'subject_level',
-            'unit_number', 'unit_name',
-            'difficulty_level', 'difficulty_label',
-            'secure_mode', 'minimum_score', 'creation_date', 'status',
-            'created_at', 'updated_at',
-        ]
-        read_only_fields = fields
 
     def get_unit_name(self, obj):
-        # Resolve from prefetched units — avoids one DB query per exam
         for unit in obj.id_subject.units.all():
             if unit.unit_number == obj.unit_number:
                 return unit.unit_name
@@ -109,127 +165,34 @@ class CreatedByMeExamSerializer(serializers.ModelSerializer):
 
 
 # ---------------------------------------------------------------------------
-# Create serializer
+# Input serializers (Create / Update)
 # ---------------------------------------------------------------------------
 
-class ExamCreateSerializer(serializers.Serializer):
+class ExamCreateSerializer(_ExamSubjectUnitValidatorMixin, serializers.Serializer):
     """Input serializer for POST /exams/."""
     name = serializers.CharField(max_length=200, required=True)
     id_subject = serializers.IntegerField(required=True)
     unit_number = serializers.IntegerField(min_value=1, required=True)
-    difficulty_level = serializers.ChoiceField(
-        choices=Exam.DIFFICULTY_CHOICES, required=True
-    )
+    difficulty_level = serializers.ChoiceField(choices=Exam.DIFFICULTY_CHOICES, required=True)
     secure_mode = serializers.BooleanField(default=False, required=False)
     minimum_score = serializers.DecimalField(
         max_digits=5, decimal_places=2, default=8.00, required=False,
         min_value=0, max_value=10,
     )
 
-    def validate_name(self, value):
-        return value.strip()
 
-    def validate_id_subject(self, value):
-        try:
-            subject = Subject.objects.prefetch_related('units').get(pk=value)
-        except Subject.DoesNotExist:
-            raise serializers.ValidationError('La materia especificada no existe.')
-        if not subject.status:
-            raise serializers.ValidationError('La materia especificada está inactiva.')
-        self.context['_subject'] = subject
-        return value
-
-    def validate(self, attrs):
-        subject = self.context.get('_subject')
-        if not subject:
-            return attrs
-
-        unit_number = attrs.get('unit_number')
-        max_units = subject.units.count()
-
-        if max_units > 0 and unit_number > max_units:
-            raise serializers.ValidationError({
-                'unit_number': (
-                    f'La unidad {unit_number} excede el número de unidades '
-                    f'de la materia "{subject.name}" ({max_units}).'
-                )
-            })
-
-        if max_units > 0:
-            unit_exists = subject.units.filter(unit_number=unit_number).exists()
-            if not unit_exists:
-                raise serializers.ValidationError({
-                    'unit_number': (
-                        f'No existe la unidad {unit_number} registrada en la materia "{subject.name}".'
-                    )
-                })
-
-        return attrs
-
-
-# ---------------------------------------------------------------------------
-# Update serializer
-# ---------------------------------------------------------------------------
-
-class ExamUpdateSerializer(serializers.Serializer):
+class ExamUpdateSerializer(_ExamSubjectUnitValidatorMixin, serializers.Serializer):
     """Input serializer for PUT /exams/{id}/."""
     name = serializers.CharField(max_length=200, required=True)
     id_subject = serializers.IntegerField(required=True)
     unit_number = serializers.IntegerField(min_value=1, required=True)
-    difficulty_level = serializers.ChoiceField(
-        choices=Exam.DIFFICULTY_CHOICES, required=True
-    )
+    difficulty_level = serializers.ChoiceField(choices=Exam.DIFFICULTY_CHOICES, required=True)
     secure_mode = serializers.BooleanField(required=True)
     minimum_score = serializers.DecimalField(
         max_digits=5, decimal_places=2, required=True,
         min_value=0, max_value=10,
     )
     status = serializers.BooleanField(required=True)
-
-    def validate_name(self, value):
-        return value.strip()
-
-    def validate_id_subject(self, value):
-        try:
-            subject = Subject.objects.prefetch_related('units').get(pk=value)
-        except Subject.DoesNotExist:
-            raise serializers.ValidationError('La materia especificada no existe.')
-        if not subject.status:
-            raise serializers.ValidationError('La materia especificada está inactiva.')
-        self.context['_subject'] = subject
-        return value
-
-    def validate(self, attrs):
-        subject = self.context.get('_subject')
-        if not subject:
-            return attrs
-
-        unit_number = attrs.get('unit_number')
-        max_units = subject.units.count()
-
-        if max_units > 0 and unit_number > max_units:
-            raise serializers.ValidationError({
-                'unit_number': (
-                    f'La unidad {unit_number} excede el número de unidades '
-                    f'de la materia "{subject.name}" ({max_units}).'
-                )
-            })
-
-        if max_units > 0:
-            unit_exists = subject.units.filter(unit_number=unit_number).exists()
-            if not unit_exists:
-                raise serializers.ValidationError({
-                    'unit_number': (
-                        f'No existe la unidad {unit_number} registrada en la materia "{subject.name}".'
-                    )
-                })
-
-        return attrs
-
-
-# ---------------------------------------------------------------------------
-# Status-only serializer
-# ---------------------------------------------------------------------------
 
 class ExamStatusSerializer(serializers.Serializer):
     """Input serializer for PATCH /exams/{id}/status/."""
