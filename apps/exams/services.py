@@ -7,7 +7,7 @@ from loguru import logger
 from django.utils import timezone
 from django.db.models import Q
 
-from .models import Exam, ExamAssignment
+from .models import Exam, ExamAssignment, ExamGroupAssignment, ExamQuestion
 from apps.academic.models import Subject
 from apps.users.models import User, StudentProfile
 
@@ -32,6 +32,7 @@ class ExamService:
             unit_number=validated_data['unit_number'],
             difficulty_level=validated_data['difficulty_level'],
             secure_mode=validated_data.get('secure_mode', False),
+            minimum_score=validated_data.get('minimum_score', 8),
             creation_date=timezone.now().date(),
             status=True,
         )
@@ -56,6 +57,7 @@ class ExamService:
         exam.unit_number = validated_data['unit_number']
         exam.difficulty_level = validated_data['difficulty_level']
         exam.secure_mode = validated_data['secure_mode']
+        exam.minimum_score = validated_data['minimum_score']
         exam.status = validated_data['status']
         exam.save()
 
@@ -126,94 +128,312 @@ class ExamService:
 
         return queryset
 
+    @staticmethod
+    def get_exams_created_by(user_pk, params: dict):
+        """
+        Return paginated-ready queryset of exams created by the given user.
+        Applies the additional safety filter that the creator must be a
+        teacher or admin (double check against DB role, not just token).
+        Uses prefetch_related to resolve unit_name without N+1 queries.
+        Expects params already validated by CreatedByMeQuerySerializer.
+        """
+        queryset = Exam.objects.select_related(
+            'id_subject', 'id_teacher',
+        ).prefetch_related(
+            'id_subject__units',
+        ).filter(
+            id_teacher_id=user_pk,
+            id_teacher__role__in=('teacher', 'admin'),
+        )
+
+        # Optional: filter by active/inactive status (validated bool or None)
+        status_param = params.get('status')
+        if status_param is not None:
+            queryset = queryset.filter(status=status_param)
+
+        # Optional: filter by subject
+        subject_id = params.get('id_subject')
+        if subject_id is not None:
+            queryset = queryset.filter(id_subject_id=subject_id)
+
+        # Optional: filter by difficulty
+        difficulty = params.get('difficulty_level')
+        if difficulty is not None:
+            queryset = queryset.filter(difficulty_level=difficulty)
+
+        # Optional: full-text search over name and subject name
+        search = params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) | Q(id_subject__name__icontains=search)
+            )
+
+        return queryset
+
 
 class ExamAssignmentService:
     """Business logic for bulk exam-to-group assignments."""
 
     @staticmethod
-    def assign_exam_to_groups(
+    def sync_exam_groups(
         exam, groups, available_from, available_to, teacher_pk,
     ) -> dict:
         """
-        Assign *exam* to every active student in the given *groups*.
+        Synchronise exam assignments so they match exactly the given *groups*.
 
-        Returns a summary dict:
-            total_students  – active students found across all groups
-            created         – new ExamAssignment records inserted
-            skipped         – duplicates that already existed
+        Group-level intent is stored in ExamGroupAssignment (persists even for
+        groups with zero students).  Per-student records live in ExamAssignment.
+
+        - New groups → upsert ExamGroupAssignment + bulk_create student ExamAssignments
+        - Removed groups → delete ExamGroupAssignment + delete pending ExamAssignments
+        - Kept groups → update window on ExamGroupAssignment + pending ExamAssignments
         """
+        from django.db import transaction
+
         now = timezone.now()
+        new_group_ids = {g.pk for g in groups}
 
-        # Collect active students per group
-        # StudentProfile.group is a FK to Group; the student's User must be active.
-        student_profiles = StudentProfile.objects.filter(
-            group__in=groups,
-            user__is_active=True,
-            user__status=True,
-            user__role='student',
-        ).select_related('user', 'group')
-
-        # Build list of (student_user_id, group_id)
-        student_group_pairs = [
-            (sp.user_id, sp.group_id) for sp in student_profiles
-        ]
-
-        total_students = len(student_group_pairs)
-
-        if total_students == 0:
-            logger.info(
-                'Exam assignment skipped — no active students | exam={} groups={}',
-                exam.pk, [g.pk for g in groups],
+        with transaction.atomic():
+            # --- 1. Group-level: determine previous state -----------------------
+            existing_group_ids = set(
+                ExamGroupAssignment.objects.filter(exam=exam)
+                .values_list('group_id', flat=True)
             )
-            return {'total_students': 0, 'created': 0, 'skipped': 0}
 
-        # Detect existing assignments to avoid duplicates
-        existing_pairs = set(
-            ExamAssignment.objects.filter(
-                exam=exam,
-                student_id__in=[uid for uid, _ in student_group_pairs],
-            ).values_list('student_id', flat=True)
-        )
+            removed_group_ids = existing_group_ids - new_group_ids
+            added_group_ids   = new_group_ids - existing_group_ids
+            kept_group_ids    = existing_group_ids & new_group_ids
 
-        new_assignments = []
-        skipped = 0
+            # --- 2. Remove groups -----------------------------------------------
+            removed_students = 0
+            if removed_group_ids:
+                ExamGroupAssignment.objects.filter(
+                    exam=exam, group_id__in=removed_group_ids,
+                ).delete()
+                removed_students = ExamAssignment.objects.filter(
+                    exam=exam,
+                    group_id__in=removed_group_ids,
+                    status='pending',
+                ).delete()[0]
 
-        for student_id, group_id in student_group_pairs:
-            if student_id in existing_pairs:
-                skipped += 1
-                continue
+            # --- 3. Add new groups -----------------------------------------------
+            created_students = 0
+            if added_group_ids:
+                added_groups = [g for g in groups if g.pk in added_group_ids]
 
-            new_assignments.append(ExamAssignment(
-                exam=exam,
-                student_id=student_id,
-                group_id=group_id,
-                status='pending',
-                score=None,
-                is_passed=None,
-                assigned_at=now,
-                available_from=available_from,
-                available_to=available_to,
-                attempt_date=None,
-            ))
-            # Mark as seen so intra-batch duplicates (same student in
-            # two groups) are also handled.
-            existing_pairs.add(student_id)
+                # Upsert group-level records
+                for gid in added_group_ids:
+                    ExamGroupAssignment.objects.update_or_create(
+                        exam=exam, group_id=gid,
+                        defaults={
+                            'available_from': available_from,
+                            'available_to': available_to,
+                        },
+                    )
 
-        if new_assignments:
-            ExamAssignment.objects.bulk_create(new_assignments)
+                # Create student-level assignments for active students
+                student_profiles = StudentProfile.objects.filter(
+                    group__in=added_groups,
+                    user__is_active=True,
+                    user__status=True,
+                    user__role='student',
+                ).select_related('user', 'group')
 
-        created = len(new_assignments)
+                seen_students: set = set()
+                new_assignments = []
+                for sp in student_profiles:
+                    if sp.user_id in seen_students:
+                        continue
+                    seen_students.add(sp.user_id)
+                    new_assignments.append(ExamAssignment(
+                        exam=exam,
+                        student_id=sp.user_id,
+                        group_id=sp.group_id,
+                        status='pending',
+                        score=None,
+                        is_passed=None,
+                        assigned_at=now,
+                        available_from=available_from,
+                        available_to=available_to,
+                        attempt_date=None,
+                    ))
+
+                if new_assignments:
+                    ExamAssignment.objects.bulk_create(new_assignments)
+                    created_students = len(new_assignments)
+
+            # --- 4. Update window for kept groups --------------------------------
+            updated_students = 0
+            if kept_group_ids:
+                ExamGroupAssignment.objects.filter(
+                    exam=exam, group_id__in=kept_group_ids,
+                ).update(available_from=available_from, available_to=available_to)
+
+                updated_students = ExamAssignment.objects.filter(
+                    exam=exam,
+                    group_id__in=kept_group_ids,
+                    status='pending',
+                ).update(available_from=available_from, available_to=available_to)
 
         logger.info(
-            'Exam assigned | exam={} groups={} total={} created={} skipped={} teacher={}',
-            exam.pk, [g.pk for g in groups], total_students, created, skipped, teacher_pk,
+            'Exam groups synced | exam={} groups={} created={} removed={} updated={} teacher={}',
+            exam.pk, sorted(new_group_ids), created_students,
+            removed_students, updated_students, teacher_pk,
         )
 
         return {
-            'total_students': total_students,
-            'created': created,
-            'skipped': skipped,
+            'created': created_students,
+            'removed': removed_students,
+            'updated': updated_students,
         }
+
+    @staticmethod
+    def get_assigned_groups(exam) -> list:
+        """
+        Return a summary of which groups an exam is assigned to.
+        Reads from ExamGroupAssignment so groups with zero students are included.
+        """
+        from django.db.models import Count
+
+        rows = (
+            ExamGroupAssignment.objects
+            .filter(exam=exam)
+            .select_related('group', 'group__id_generation')
+            .annotate(
+                students_assigned=Count(
+                    'group__exam_assignments',
+                    filter=Q(group__exam_assignments__exam=exam),
+                )
+            )
+            .order_by('group_id')
+        )
+
+        result = []
+        for row in rows:
+            gen = row.group.id_generation
+            gen_year = gen.year if gen else ''
+            letter = row.group.group_letter
+            result.append({
+                'group_id': row.group_id,
+                'group_label': f"{letter} (Gen {gen_year})",
+                'students_assigned': row.students_assigned,
+                'available_from': row.available_from,
+                'available_to': row.available_to,
+            })
+        return result
+
+    @staticmethod
+    def get_group_stats(exam, group_id: int | None = None) -> list:
+        """
+        Return per-group statistics for an exam.
+        If group_id is given, returns only that group's stats (one-element list).
+        Groups come from ExamGroupAssignment so groups with 0 students appear.
+        Aggregations are done at DB level via a single query on ExamAssignment.
+        """
+        from django.db.models import Avg, Count, Max, Min
+        from decimal import Decimal
+
+        minimum = exam.minimum_score
+
+        # --- 1. Aggregate student stats per group in one query ----------------
+        assignment_qs = ExamAssignment.objects.filter(exam=exam)
+        if group_id is not None:
+            assignment_qs = assignment_qs.filter(group_id=group_id)
+
+        agg_rows = (
+            assignment_qs
+            .values('group_id')
+            .annotate(
+                total_students=Count('id_assignment'),
+                average_score=Avg('score'),
+                highest_score=Max('score'),
+                lowest_score=Min('score'),
+                pending_count=Count('id_assignment', filter=Q(status='pending')),
+                in_progress_count=Count('id_assignment', filter=Q(status='in_progress')),
+                completed_count=Count('id_assignment', filter=Q(status='completed')),
+                approved_count=Count(
+                    'id_assignment',
+                    filter=Q(score__gte=minimum, score__isnull=False),
+                ),
+                scored_count=Count(
+                    'id_assignment',
+                    filter=Q(score__isnull=False),
+                ),
+            )
+        )
+        stats_by_group = {row['group_id']: row for row in agg_rows}
+
+        # --- 2. List assigned groups (filtered if group_id supplied) ----------
+        group_qs = ExamGroupAssignment.objects.filter(exam=exam)
+        if group_id is not None:
+            group_qs = group_qs.filter(group_id=group_id)
+
+        group_rows = (
+            group_qs
+            .select_related('group', 'group__id_generation')
+            .order_by('group_id')
+        )
+
+        result = []
+        for ga in group_rows:
+            grp = ga.group
+            gen = grp.id_generation
+            gen_year = gen.year if gen else ''
+            label = f"{grp.academic_level}{grp.group_letter} (Gen {gen_year})"
+
+            agg = stats_by_group.get(ga.group_id)
+            if agg:
+                scored = agg['scored_count']
+                approval_rate = (
+                    round(Decimal(agg['approved_count']) / Decimal(scored) * 100, 2)
+                    if scored > 0 else None
+                )
+                avg_score = round(agg['average_score'], 2) if agg['average_score'] is not None else None
+                result.append({
+                    'group_id': ga.group_id,
+                    'group_label': label,
+                    'total_students': agg['total_students'],
+                    'average_score': avg_score,
+                    'highest_score': agg['highest_score'],
+                    'lowest_score': agg['lowest_score'],
+                    'approval_rate': approval_rate,
+                    'pending_count': agg['pending_count'],
+                    'in_progress_count': agg['in_progress_count'],
+                    'completed_count': agg['completed_count'],
+                })
+            else:
+                result.append({
+                    'group_id': ga.group_id,
+                    'group_label': label,
+                    'total_students': 0,
+                    'average_score': None,
+                    'highest_score': None,
+                    'lowest_score': None,
+                    'approval_rate': None,
+                    'pending_count': 0,
+                    'in_progress_count': 0,
+                    'completed_count': 0,
+                })
+
+        return result
+
+    @staticmethod
+    def get_group_students(exam, group_id: int, status_filter: str | None = None):
+        """
+        Return ExamAssignment queryset for a specific exam + group,
+        ordered by last_name, first_name for the grades view.
+        Uses select_related to resolve student data in a single query.
+        Optional status_filter: 'pending' | 'in_progress' | 'completed'.
+        """
+        qs = (
+            ExamAssignment.objects
+            .filter(exam=exam, group_id=group_id)
+            .select_related('student')
+            .order_by('student__last_name', 'student__first_name')
+        )
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
 
     @staticmethod
     def get_student_assignments(student_pk, params: dict):

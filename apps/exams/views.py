@@ -28,8 +28,13 @@ from .serializers import (
     ExamStatusSerializer,
     ExamSecureModeSerializer,
     ExamAssignSerializer,
+    ExamAssignmentGroupSummarySerializer,
+    ExamGroupStatsSerializer,
+    GroupStudentGradeSerializer,
     MyAssignmentSerializer,
     MyAssignmentQuerySerializer,
+    CreatedByMeExamSerializer,
+    CreatedByMeQuerySerializer,
 )
 from .services import ExamService, ExamAssignmentService
 from apps.academic.permissions import IsTeacherOrAdmin, IsStudent
@@ -40,6 +45,7 @@ from utils.responses import success_response, error_response
 MSG_INVALID_DATA = 'Datos inválidos.'
 MSG_EXAM_NOT_FOUND = 'Examen no encontrado.'
 MSG_NO_PERMISSION = 'No tiene permiso para acceder a este examen.'
+MSG_GROUP_NOT_ASSIGNED = 'El grupo no está asignado a este examen.'
 
 
 class ExamPagination(PageNumberPagination):
@@ -297,6 +303,7 @@ class QuestionTemplateDownloadView(APIView):
     """
     @extend_schema(
         summary="Descargar Plantilla de Preguntas", 
+        tags=['Plantillas de Preguntas'],
         description="Genera y descarga un archivo Excel con una plantilla para ingresar preguntas de examen.",
         responses={
             200: OpenApiTypes.BINARY,
@@ -405,21 +412,206 @@ class QuestionTemplateDownloadView(APIView):
 
 
 # ---------------------------------------------------------------------------
+# Group-level stats for an exam
+# ---------------------------------------------------------------------------
+
+class ExamGroupStatsView(APIView):
+    """
+    GET /api/exams/{exam_id}/stats/groups/
+    Returns per-group statistics for ALL groups assigned to the exam.
+    Groups with zero students are included.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Estadísticas por grupo de un examen (todos los grupos)',
+        tags=['Estadísticas de Exámenes'],
+        responses={
+            200: ExamGroupStatsSerializer(many=True),
+            403: OpenApiResponse(description='Sin permisos'),
+            404: OpenApiResponse(description='Examen no encontrado'),
+        },
+    )
+    def get(self, request, exam_id):
+        try:
+            exam = Exam.objects.get(pk=exam_id)
+        except Exam.DoesNotExist:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        stats = ExamAssignmentService.get_group_stats(exam)
+        serializer = ExamGroupStatsSerializer(stats, many=True)
+        return success_response(serializer.data)
+
+
+class ExamGroupStatsByGroupView(APIView):
+    """
+    GET /api/exams/{exam_id}/stats/groups/{group_id}/
+    Returns statistics for a single group within the exam.
+    Used by the tab-based grades view to load one group at a time.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Estadísticas de un grupo específico en un examen',
+        tags=['Estadísticas de Exámenes'],
+        responses={
+            200: ExamGroupStatsSerializer(),
+            403: OpenApiResponse(description='Sin permisos'),
+            404: OpenApiResponse(description='Examen o grupo no encontrado'),
+        },
+    )
+    def get(self, request, exam_id, group_id):
+        try:
+            exam = Exam.objects.get(pk=exam_id)
+        except Exam.DoesNotExist:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        stats = ExamAssignmentService.get_group_stats(exam, group_id=group_id)
+        if not stats:
+            return error_response(
+                'El grupo no está asignado a este examen.',
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = ExamGroupStatsSerializer(stats[0])
+        return success_response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Students grades per group for an exam
+# ---------------------------------------------------------------------------
+
+class ExamGroupStudentsView(APIView):
+    """
+    GET /api/exams/{exam_id}/groups/{group_id}/students/
+    Returns the list of students assigned to the exam within the given group,
+    including their current score and status.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Calificaciones de estudiantes por grupo en un examen',
+        tags=['Calificaciones de Exámenes'],
+        parameters=[
+            OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
+            OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
+            OpenApiParameter(
+                'status', OpenApiTypes.STR,
+                description='Filtrar por estado de la asignación (pending, in_progress, completed)',
+                required=False,
+                enum=['pending', 'in_progress', 'completed'],
+            ),
+        ],
+        responses={
+            200: GroupStudentGradeSerializer(many=True),
+            400: OpenApiResponse(description='Parámetro status inválido'),
+            403: OpenApiResponse(description='Sin permisos'),
+            404: OpenApiResponse(description='Examen o grupo no encontrado'),
+        },
+    )
+    def get(self, request, exam_id, group_id):
+        try:
+            exam = Exam.objects.get(pk=exam_id)
+        except Exam.DoesNotExist:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        # Verify the group is actually assigned to this exam
+        from .models import ExamGroupAssignment
+        if not ExamGroupAssignment.objects.filter(exam=exam, group_id=group_id).exists():
+            return error_response(MSG_GROUP_NOT_ASSIGNED, status_code=status.HTTP_404_NOT_FOUND)
+
+        # Validate optional status filter
+        VALID_STATUSES = {'pending', 'in_progress', 'completed'}
+        status_filter = request.query_params.get('status')
+        if status_filter is not None and status_filter not in VALID_STATUSES:
+            return error_response(
+                f'Estado inválido. Valores permitidos: {", ".join(sorted(VALID_STATUSES))}.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        assignments = ExamAssignmentService.get_group_students(exam, group_id, status_filter=status_filter)
+
+        paginator = ExamPagination()
+        page = paginator.paginate_queryset(assignments, request)
+        serializer = GroupStudentGradeSerializer(page, many=True)
+        page_size = paginator.get_page_size(request) or paginator.page_size
+
+        payload = {
+            'results': serializer.data,
+            'pagination': {
+                'count': paginator.page.paginator.count,
+                'page': paginator.page.number,
+                'page_size': page_size,
+                'total_pages': paginator.page.paginator.num_pages,
+                'next': paginator.get_next_link(),
+                'previous': paginator.get_previous_link(),
+            },
+        }
+        return success_response(payload)
+
+
+# ---------------------------------------------------------------------------
 # Exam assignment to groups
 # ---------------------------------------------------------------------------
 
 class ExamAssignView(APIView):
-    """POST /exam-assignments/assign — assign an exam to groups."""
+    """
+    GET  /exam-assignments/assign/?exam_id=<id>  — current group assignments for an exam.
+    POST /exam-assignments/assign/               — sync (add/remove/update) group assignments.
+    """
     permission_classes = [IsTeacherOrAdmin]
 
     @extend_schema(
-        summary='Asignar examen a grupos',
+        summary='Consultar grupos asignados a un examen',
+        tags=['Asignaciones de Exámenes'],
+        parameters=[
+            OpenApiParameter('exam_id', OpenApiTypes.INT, description='ID del examen', required=True),
+        ],
+        responses={
+            200: ExamAssignmentGroupSummarySerializer(many=True),
+            400: OpenApiResponse(description='Parámetro faltante'),
+            403: OpenApiResponse(description='Sin permisos'),
+            404: OpenApiResponse(description='Examen no encontrado'),
+        },
+    )
+    def get(self, request):
+        raw_exam_id = request.query_params.get('exam_id')
+        if not raw_exam_id:
+            return error_response('El parámetro exam_id es requerido.')
+        try:
+            exam_id = int(raw_exam_id)
+        except (ValueError, TypeError):
+            return error_response('exam_id debe ser un entero válido.')
+
+        try:
+            exam = Exam.objects.get(pk=exam_id)
+        except Exam.DoesNotExist:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        groups_data = ExamAssignmentService.get_assigned_groups(exam)
+        serializer = ExamAssignmentGroupSummarySerializer(groups_data, many=True)
+        return success_response(serializer.data)
+
+    @extend_schema(
+        summary='Sincronizar grupos asignados a un examen',
         tags=['Asignaciones de Exámenes'],
         request=ExamAssignSerializer,
         responses={
-            201: OpenApiResponse(description='Asignación exitosa'),
+            200: OpenApiResponse(description='Sincronización exitosa'),
             400: OpenApiResponse(description='Error de validación'),
-            404: OpenApiResponse(description='Examen o grupos no encontrados'),
+            403: OpenApiResponse(description='Sin permisos'),
         },
     )
     def post(self, request):
@@ -429,31 +621,106 @@ class ExamAssignView(APIView):
             return error_response(MSG_INVALID_DATA, serializer.errors)
 
         exam = serializer.context['_exam']
-        groups = serializer.context['_groups']
+        groups = serializer.context.get('_groups', [])
 
         # Ownership: teachers can only assign their own exams
         if not _can_access_exam(request, exam):
             return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
 
-        summary = ExamAssignmentService.assign_exam_to_groups(
-            exam=exam,
-            groups=groups,
-            available_from=serializer.validated_data['available_from'],
-            available_to=serializer.validated_data['available_to'],
-            teacher_pk=request.user.pk,
-        )
-
-        if summary['total_students'] == 0:
+        try:
+            summary = ExamAssignmentService.sync_exam_groups(
+                exam=exam,
+                groups=groups,
+                available_from=serializer.validated_data['available_from'],
+                available_to=serializer.validated_data['available_to'],
+                teacher_pk=request.user.pk,
+            )
+            # Return the updated group list so the frontend can refresh immediately
+            assigned_groups = ExamAssignmentService.get_assigned_groups(exam)
+            summary['assigned_groups'] = ExamAssignmentGroupSummarySerializer(
+                assigned_groups, many=True
+            ).data
+        except Exception:  # noqa: BLE001
+            logger.exception('Unexpected error syncing exam groups | exam={}', exam.pk)
             return error_response(
-                'Los grupos seleccionados no tienen alumnos activos.',
-                status_code=status.HTTP_400_BAD_REQUEST,
+                'Error al sincronizar las asignaciones.',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        return success_response(
-            summary,
-            'Examen asignado exitosamente.',
-            status.HTTP_201_CREATED,
+        return success_response(summary, 'Asignaciones sincronizadas exitosamente.')
+
+
+# ---------------------------------------------------------------------------
+# Teacher/Admin: Exams created by me
+# ---------------------------------------------------------------------------
+
+class _CreatedByMeThrottle(UserRateThrottle):
+    """Dedicated throttle scope for teacher/admin created-by-me listing."""
+    scope = 'created_by_me'
+
+
+class CreatedByMeExamsView(APIView):
+    """GET /exams/created-by-me — paginated list of exams created by the requester."""
+    permission_classes = [IsTeacherOrAdmin]
+    throttle_classes = [_CreatedByMeThrottle]
+
+    @extend_schema(
+        summary='Mis exámenes creados',
+        tags=['Exámenes'],
+        parameters=[
+            OpenApiParameter('status', OpenApiTypes.BOOL, description='Filtrar por estado (true/false)', required=False),
+            OpenApiParameter('id_subject', OpenApiTypes.INT, description='Filtrar por materia', required=False),
+            OpenApiParameter('difficulty_level', OpenApiTypes.STR, description='Filtrar por dificultad (easy, medium, hard)', required=False),
+            OpenApiParameter('search', OpenApiTypes.STR, description='Buscar por nombre o materia', required=False),
+            OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
+            OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
+        ],
+        responses={
+            200: CreatedByMeExamSerializer(many=True),
+            400: OpenApiResponse(description='Parámetros inválidos'),
+            403: OpenApiResponse(description='Sin permisos'),
+        },
+    )
+    def get(self, request):
+        # Rule 1: validate all query-param inputs through a serializer
+        query_serializer = CreatedByMeQuerySerializer(data=request.query_params)
+        if not query_serializer.is_valid():
+            return error_response(MSG_INVALID_DATA, query_serializer.errors)
+
+        try:
+            queryset = ExamService.get_exams_created_by(
+                user_pk=request.user.pk,
+                params=query_serializer.validated_data,
+            )
+
+            paginator = ExamPagination()
+            page = paginator.paginate_queryset(queryset, request)
+            serializer = CreatedByMeExamSerializer(page, many=True)
+            page_size = paginator.get_page_size(request) or paginator.page_size
+
+            payload = {
+                'results': serializer.data,
+                'pagination': {
+                    'count': paginator.page.paginator.count,
+                    'page': paginator.page.number,
+                    'page_size': page_size,
+                    'total_pages': paginator.page.paginator.num_pages,
+                    'next': paginator.get_next_link(),
+                    'previous': paginator.get_previous_link(),
+                },
+            }
+        except Exception:  # noqa: BLE001
+            logger.exception('Unexpected error in created-by-me | user={}', request.user.pk)
+            return error_response(
+                'Error al obtener los exámenes.',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        logger.info(
+            'Created-by-me listed | user={} count={}',
+            request.user.pk, paginator.page.paginator.count,
         )
+        return success_response(payload)
 
 
 # ---------------------------------------------------------------------------

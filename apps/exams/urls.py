@@ -12,7 +12,11 @@ from .views import (
     ExamDeleteView,
     QuestionTemplateDownloadView,
     ExamAssignView,
+    ExamGroupStatsView,
+    ExamGroupStatsByGroupView,
+    ExamGroupStudentsView,
     MyAssignmentsView,
+    CreatedByMeExamsView,
 )
 
 app_name = 'exams'
@@ -26,6 +30,10 @@ urlpatterns = [
     path('<int:pk>/status/', ExamStatusView.as_view(), name='exam-status'),
     path('<int:pk>/secure-mode/', ExamSecureModeView.as_view(), name='exam-secure-mode'),
     path('<int:pk>/delete/', ExamDeleteView.as_view(), name='exam-delete'),
+    path('<int:exam_id>/stats/groups/', ExamGroupStatsView.as_view(), name='exam-group-stats'),
+    path('<int:exam_id>/stats/groups/<int:group_id>/', ExamGroupStatsByGroupView.as_view(), name='exam-group-stats-single'),
+    path('<int:exam_id>/groups/<int:group_id>/students/', ExamGroupStudentsView.as_view(), name='exam-group-students'),
+    path('created-by-me/', CreatedByMeExamsView.as_view(), name='exam-created-by-me'),
 
     # ------------------------------------------------------------------
     # Exam assignments

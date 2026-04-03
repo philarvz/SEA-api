@@ -11,6 +11,34 @@ from apps.academic.models import Subject, Unit, Group
 
 
 # ---------------------------------------------------------------------------
+# Student grades per group (for the grades view)
+# ---------------------------------------------------------------------------
+
+STATUS_LABELS = dict(ExamAssignment.ASSIGNMENT_STATUS_CHOICES)
+
+
+class GroupStudentGradeSerializer(serializers.ModelSerializer):
+    """Read-only serializer for a student's exam record inside a group."""
+    assignment_id = serializers.IntegerField(source='id_assignment', read_only=True)
+    student_id = serializers.IntegerField(source='student.pk', read_only=True)
+    matricula = serializers.CharField(source='student.matricula', read_only=True)
+    full_name = serializers.CharField(source='student.full_name', read_only=True)
+    status_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ExamAssignment
+        fields = [
+            'assignment_id', 'student_id', 'matricula', 'full_name',
+            'status', 'status_label', 'score', 'is_passed',
+            'attempt_date', 'available_from', 'available_to',
+        ]
+        read_only_fields = fields
+
+    def get_status_label(self, obj):
+        return STATUS_LABELS.get(obj.status, obj.status)
+
+
+# ---------------------------------------------------------------------------
 # Output serializer (read operations)
 # ---------------------------------------------------------------------------
 
@@ -30,7 +58,7 @@ class ExamSerializer(serializers.ModelSerializer):
             'id_teacher', 'teacher_name',
             'unit_number', 'unit_name',
             'difficulty_level', 'difficulty_label',
-            'secure_mode', 'creation_date', 'status',
+            'secure_mode', 'minimum_score', 'creation_date', 'status',
             'created_at', 'updated_at',
         ]
         read_only_fields = fields
@@ -46,6 +74,41 @@ class ExamSerializer(serializers.ModelSerializer):
 
 
 # ---------------------------------------------------------------------------
+# Created-by-me serializer (no teacher fields — they are the requester)
+# ---------------------------------------------------------------------------
+
+class CreatedByMeExamSerializer(serializers.ModelSerializer):
+    """
+    Read-only serializer for GET /exams/created-by-me.
+    Omits teacher fields (caller is always the creator).
+    Resolves unit_name from prefetched units to avoid N+1.
+    """
+    subject_name = serializers.CharField(source='id_subject.name', read_only=True)
+    subject_level = serializers.IntegerField(source='id_subject.level_number', read_only=True)
+    difficulty_label = serializers.CharField(source='get_difficulty_level_display', read_only=True)
+    unit_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Exam
+        fields = [
+            'id_exam', 'name', 'title',
+            'id_subject', 'subject_name', 'subject_level',
+            'unit_number', 'unit_name',
+            'difficulty_level', 'difficulty_label',
+            'secure_mode', 'minimum_score', 'creation_date', 'status',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_unit_name(self, obj):
+        # Resolve from prefetched units — avoids one DB query per exam
+        for unit in obj.id_subject.units.all():
+            if unit.unit_number == obj.unit_number:
+                return unit.unit_name
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Create serializer
 # ---------------------------------------------------------------------------
 
@@ -58,6 +121,10 @@ class ExamCreateSerializer(serializers.Serializer):
         choices=Exam.DIFFICULTY_CHOICES, required=True
     )
     secure_mode = serializers.BooleanField(default=False, required=False)
+    minimum_score = serializers.DecimalField(
+        max_digits=5, decimal_places=2, default=8.00, required=False,
+        min_value=0, max_value=10,
+    )
 
     def validate_name(self, value):
         return value.strip()
@@ -113,6 +180,10 @@ class ExamUpdateSerializer(serializers.Serializer):
         choices=Exam.DIFFICULTY_CHOICES, required=True
     )
     secure_mode = serializers.BooleanField(required=True)
+    minimum_score = serializers.DecimalField(
+        max_digits=5, decimal_places=2, required=True,
+        min_value=0, max_value=10,
+    )
     status = serializers.BooleanField(required=True)
 
     def validate_name(self, value):
@@ -181,11 +252,14 @@ class ExamSecureModeSerializer(serializers.Serializer):
 class ExamAssignSerializer(serializers.Serializer):
     """
     Input serializer for POST /exam-assignments/assign.
-    Validates the payload for bulk-assigning an exam to groups.
+    Validates bulk group-sync for an exam assignment.
+    group_ids may be empty (removes all pending assignments).
     """
     exam_id = serializers.IntegerField(required=True)
     group_ids = serializers.ListField(
-        child=serializers.IntegerField(), required=True, allow_empty=False,
+        child=serializers.IntegerField(),
+        required=True,
+        allow_empty=True,   # empty list = remove all pending assignments
     )
     available_from = serializers.DateTimeField(required=True)
     available_to = serializers.DateTimeField(required=True)
@@ -204,6 +278,10 @@ class ExamAssignSerializer(serializers.Serializer):
         if len(value) != len(set(value)):
             raise serializers.ValidationError('Se enviaron IDs de grupo duplicados.')
 
+        if not value:
+            self.context['_groups'] = []
+            return value
+
         groups = Group.objects.filter(pk__in=value)
         found_ids = set(groups.values_list('pk', flat=True))
         missing = set(value) - found_ids
@@ -221,6 +299,29 @@ class ExamAssignSerializer(serializers.Serializer):
                 'available_to': 'La fecha de cierre debe ser posterior a la de apertura.',
             })
         return attrs
+
+
+class ExamAssignmentGroupSummarySerializer(serializers.Serializer):
+    """Read-only serializer showing which groups an exam is currently assigned to."""
+    group_id = serializers.IntegerField()
+    group_label = serializers.CharField()
+    students_assigned = serializers.IntegerField()
+    available_from = serializers.DateTimeField()
+    available_to = serializers.DateTimeField()
+
+
+class ExamGroupStatsSerializer(serializers.Serializer):
+    """Read-only serializer for per-group exam stats dashboard."""
+    group_id = serializers.IntegerField()
+    group_label = serializers.CharField()
+    total_students = serializers.IntegerField()
+    average_score = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    highest_score = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    lowest_score = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    approval_rate = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    pending_count = serializers.IntegerField()
+    in_progress_count = serializers.IntegerField()
+    completed_count = serializers.IntegerField()
 
 
 class ExamAssignmentOutputSerializer(serializers.ModelSerializer):
@@ -318,3 +419,28 @@ class MyAssignmentQuerySerializer(serializers.Serializer):
         default=None,
     )
     include_completed = serializers.BooleanField(required=False, default=False)
+
+
+# ---------------------------------------------------------------------------
+# Query-param input serializer for created-by-me
+# ---------------------------------------------------------------------------
+
+class CreatedByMeQuerySerializer(serializers.Serializer):
+    """Validates the query parameters accepted by CreatedByMeExamsView."""
+    status = serializers.BooleanField(required=False, allow_null=True, default=None)
+    id_subject = serializers.IntegerField(required=False, allow_null=True, default=None, min_value=1)
+    difficulty_level = serializers.ChoiceField(
+        choices=Exam.DIFFICULTY_CHOICES,
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    search = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True,
+        default=None, max_length=100,
+    )
+
+    def validate_search(self, value):
+        if value:
+            return value.strip() or None
+        return None
