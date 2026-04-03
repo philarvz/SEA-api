@@ -72,6 +72,15 @@ class ExamService:
         return exam
 
     @staticmethod
+    def change_secure_mode(exam: Exam, secure_mode: bool) -> Exam:
+        """Activate or deactivate secure mode for an exam."""
+        exam.secure_mode = secure_mode
+        exam.save(update_fields=['secure_mode', 'updated_at'])
+        state = 'activado' if secure_mode else 'desactivado'
+        logger.info('Exam secure_mode {} | id={}', state, exam.pk)
+        return exam
+
+    @staticmethod
     def soft_delete(exam: Exam) -> Exam:
         """Logically delete an exam by setting status=False."""
         exam.status = False

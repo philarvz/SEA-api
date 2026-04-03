@@ -24,6 +24,7 @@ from .serializers import (
     ExamCreateSerializer,
     ExamUpdateSerializer,
     ExamStatusSerializer,
+    ExamSecureModeSerializer,
     ExamAssignSerializer,
 )
 from .services import ExamService, ExamAssignmentService
@@ -214,6 +215,43 @@ class ExamStatusView(APIView):
         return success_response(
             {'id_exam': exam.pk, 'status': exam.status},
             f'Examen {state} exitosamente.',
+        )
+
+
+# ---------------------------------------------------------------------------
+# Secure mode toggle
+# ---------------------------------------------------------------------------
+
+class ExamSecureModeView(APIView):
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Activar/Desactivar modo seguro',
+        tags=['Exámenes'],
+        request=ExamSecureModeSerializer,
+        responses={
+            200: OpenApiResponse(description='Modo seguro actualizado'),
+            404: OpenApiResponse(description='No encontrado'),
+        },
+    )
+    def patch(self, request, pk):
+        try:
+            exam = Exam.objects.get(pk=pk)
+        except Exam.DoesNotExist:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        serializer = ExamSecureModeSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(MSG_INVALID_DATA, serializer.errors)
+
+        exam = ExamService.change_secure_mode(exam, serializer.validated_data['secure_mode'])
+        state = 'activado' if exam.secure_mode else 'desactivado'
+        return success_response(
+            {'id_exam': exam.pk, 'secure_mode': exam.secure_mode},
+            f'Modo seguro {state} exitosamente.',
         )
 
 

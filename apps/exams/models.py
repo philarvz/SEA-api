@@ -1,7 +1,7 @@
 """
 Exams module models
-Includes: Exam, ExamQuestion, ExamPerson
-Note: id_teacher and id_person now reference users.User (AbstractUser)
+Includes: Exam, ExamQuestion, ExamAssignment
+Note: id_teacher references users.User (AbstractUser)
 """
 
 from django.db import models
@@ -107,55 +107,6 @@ class ExamQuestion(models.Model):
 
     def __str__(self):
         return f"{self.id_exam.title} - Question {self.question_order}"
-
-
-class ExamPerson(models.Model):
-    """
-    Model representing the assignment of an exam to a student
-    """
-    STATUS_CHOICES = [
-        ('pending', 'Pending'),
-        ('in_progress', 'In Progress'),
-        ('finished', 'Finished'),
-        ('not_presented', 'Not Presented'),
-    ]
-
-    id_exam_person = models.AutoField(
-        primary_key=True,
-        db_column='id_exam_person'
-    )
-    id_exam = models.ForeignKey(
-        Exam,
-        on_delete=models.CASCADE,
-        db_column='id_exam',
-        related_name='assignments'
-    )
-    id_person = models.ForeignKey(
-        'users.User',
-        on_delete=models.CASCADE,
-        db_column='id_person',
-        related_name='assigned_exams'
-    )
-    assignment_date = models.DateField(db_column='assignment_date')
-    start_datetime = models.DateTimeField(null=True, blank=True, db_column='start_datetime')
-    end_datetime = models.DateTimeField(null=True, blank=True, db_column='end_datetime')
-    grade = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        null=True,
-        blank=True
-    )
-    status = models.CharField(max_length=50, choices=STATUS_CHOICES)
-
-    class Meta:
-        db_table = 'exam_person'
-        verbose_name = 'Exam Person'
-        verbose_name_plural = 'Exam Persons'
-        unique_together = [['id_exam', 'id_person']]
-        ordering = ['-assignment_date']
-
-    def __str__(self):
-        return f"{self.id_person.full_name} - {self.id_exam.title}"
 
 
 class ExamAssignment(models.Model):

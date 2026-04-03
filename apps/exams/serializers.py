@@ -166,6 +166,15 @@ class ExamStatusSerializer(serializers.Serializer):
 
 
 # ---------------------------------------------------------------------------
+# Secure mode serializer
+# ---------------------------------------------------------------------------
+
+class ExamSecureModeSerializer(serializers.Serializer):
+    """Input serializer for PATCH /exams/{id}/secure-mode/."""
+    secure_mode = serializers.BooleanField(required=True)
+
+
+# ---------------------------------------------------------------------------
 # Exam Assignment serializers
 # ---------------------------------------------------------------------------
 

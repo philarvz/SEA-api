@@ -8,6 +8,7 @@ from .views import (
     ExamListCreateView,
     ExamDetailView,
     ExamStatusView,
+    ExamSecureModeView,
     ExamDeleteView,
     QuestionTemplateDownloadView,
     ExamAssignView,
@@ -22,6 +23,7 @@ urlpatterns = [
     path('', ExamListCreateView.as_view(), name='exam-list-create'),
     path('<int:pk>/', ExamDetailView.as_view(), name='exam-detail'),
     path('<int:pk>/status/', ExamStatusView.as_view(), name='exam-status'),
+    path('<int:pk>/secure-mode/', ExamSecureModeView.as_view(), name='exam-secure-mode'),
     path('<int:pk>/delete/', ExamDeleteView.as_view(), name='exam-delete'),
 
     # ------------------------------------------------------------------
