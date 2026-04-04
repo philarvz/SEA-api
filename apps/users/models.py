@@ -25,11 +25,14 @@ class User(AbstractUser):
     # Sobreescribimos email para hacerlo único
     email = models.EmailField(max_length=150, unique=True)
     # Matrícula institucional única por usuario (ej. 20233tn070)
+    # Opcional para administradores, requerido para estudiantes y docentes
     matricula = models.CharField(
         max_length=20,
         unique=True,
+        null=True,
+        blank=True,
         db_column='matricula',
-        help_text='Matrícula institucional única del usuario.',
+        help_text='Matrícula institucional única del usuario. No requerido para administradores.',
     )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
     status = models.BooleanField(default=True)
@@ -104,3 +107,34 @@ class TeacherProfile(models.Model):
 
     def __str__(self):
         return f"Teacher: {self.user.username}"
+
+
+class PasswordResetCode(models.Model):
+    """
+    Almacena códigos de verificación de 6 dígitos para recuperación de contraseña.
+    Los códigos expiran después de 15 minutos.
+    """
+    
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='password_reset_codes'
+    )
+    code = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_used = models.BooleanField(default=False)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'password_reset_code'
+        verbose_name = 'Password Reset Code'
+        verbose_name_plural = 'Password Reset Codes'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Code for {self.user.email} - {self.code}"
+
+    def is_valid(self) -> bool:
+        """Verifica si el código aún es válido (no usado y no expirado)"""
+        from django.utils import timezone
+        return not self.is_used and self.expires_at > timezone.now()
