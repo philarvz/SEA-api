@@ -11,7 +11,8 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
 from .models import AuditLog
-from .serializers import AuditLogSerializer
+from .serializers import AuditLogAdminSerializer
+from apps.users.permissions import IsAdmin
 from utils.pagination import GlobalPagination
 from utils.responses import error_response
 
@@ -21,7 +22,19 @@ class AuditLogListView(APIView):
     GET /api/audit-logs/
     Lista paginada de registros de auditoría con filtros opcionales.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    _OPERATION_FILTER_MAP = {
+        'INSERT': 'INSERT',
+        'UPDATE': 'UPDATE',
+        'DELETE': 'DELETE',
+        'CREACION': 'INSERT',
+        'CREACIÓN': 'INSERT',
+        'ACTUALIZACION': 'UPDATE',
+        'ACTUALIZACIÓN': 'UPDATE',
+        'ELIMINACION': 'DELETE',
+        'ELIMINACIÓN': 'DELETE',
+    }
 
     @extend_schema(
         summary='Listar registros de auditoría',
@@ -30,11 +43,11 @@ class AuditLogListView(APIView):
             OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
             OpenApiParameter('page_size', OpenApiTypes.INT, description='Registros por página (max: 100)', required=False),
             OpenApiParameter('table_name', OpenApiTypes.STR, description='Filtrar por nombre de tabla', required=False),
-            OpenApiParameter('operation_type', OpenApiTypes.STR, description='Filtrar por tipo de operación (INSERT, UPDATE, DELETE)', required=False, enum=['INSERT', 'UPDATE', 'DELETE']),
+            OpenApiParameter('operation_type', OpenApiTypes.STR, description='Filtrar por tipo de operación (Creación, Actualización, Eliminación)', required=False, enum=['INSERT', 'UPDATE', 'DELETE', 'Creación', 'Actualización', 'Eliminación']),
             OpenApiParameter('changed_at_from', OpenApiTypes.DATETIME, description='Fecha inicio (ISO 8601)', required=False),
             OpenApiParameter('changed_at_to', OpenApiTypes.DATETIME, description='Fecha fin (ISO 8601)', required=False),
         ],
-        responses={200: AuditLogSerializer(many=True)},
+        responses={200: AuditLogAdminSerializer(many=True)},
     )
     def get(self, request):
         try:
@@ -48,7 +61,10 @@ class AuditLogListView(APIView):
             if table_name:
                 queryset = queryset.filter(table_name=table_name)
             if operation_type:
-                queryset = queryset.filter(operation_type=operation_type.upper())
+                operation_key = operation_type.strip().upper()
+                db_operation = self._OPERATION_FILTER_MAP.get(operation_key)
+                if db_operation:
+                    queryset = queryset.filter(operation_type=db_operation)
             if changed_at_from:
                 queryset = queryset.filter(changed_at__gte=changed_at_from)
             if changed_at_to:
@@ -56,9 +72,13 @@ class AuditLogListView(APIView):
 
             paginator = GlobalPagination()
             paginated_queryset = paginator.paginate_queryset(queryset, request)
-            serializer = AuditLogSerializer(paginated_queryset, many=True)
+            serializer = AuditLogAdminSerializer(paginated_queryset, many=True)
 
-            return paginator.get_paginated_response(serializer.data)
+            # Excluir de la respuesta los registros sin cambios visibles,
+            # pero solo dentro de la página actual para evitar timeouts.
+            visible_data = [row for row in serializer.data if row.get('changes')]
+
+            return paginator.get_paginated_response(visible_data)
 
         except Exception as exc:
             logger.error('Error listing audit logs | {}', exc)
