@@ -185,6 +185,43 @@ def _transform_field_values(field, old_value, new_value):
     return old_value, new_value, field
 
 
+def _handle_sensitive_field(field, old_value, new_value):
+    """Handle sensitive field by masking values."""
+    return {
+        'field': FIELD_LABELS.get(field, field),
+        'old': 'CAMBIADO' if old_value not in (None, '') else '-',
+        'new': 'CAMBIADO' if new_value not in (None, '') else '-',
+    }
+
+
+def _process_field_change(field, old_value, new_value, dedup_changes):
+    """
+    Process a field change and update dedup_changes dict if it should be included.
+    Returns True if the field was processed, False otherwise.
+    """
+    old_value, new_value, field = _transform_field_values(field, old_value, new_value)
+
+    # Omitir si después de transformar quedan iguales
+    if old_value == new_value:
+        return False
+
+    canonical_key = CANONICAL_FIELD_KEY.get(field, field)
+    current_priority = FIELD_PRIORITY.get(field, 0)
+
+    change_payload = {
+        'field': FIELD_LABELS.get(field, field),
+        'old': _normalize_value(old_value),
+        'new': _normalize_value(new_value),
+        '_priority': current_priority,
+    }
+
+    existing = dedup_changes.get(canonical_key)
+    if not existing or current_priority >= existing.get('_priority', -1):
+        dedup_changes[canonical_key] = change_payload
+
+    return True
+
+
 def filter_audit_log_for_admin(audit_log):
     """
     Recibe un registro de auditoría completo y devuelve solo la información
@@ -217,36 +254,14 @@ def filter_audit_log_for_admin(audit_log):
 
         # Campos sensibles
         if normalized_field in SENSITIVE_FIELDS:
-            filtered_log['changes'].append({
-                'field': FIELD_LABELS.get(field, field),
-                'old': 'CAMBIADO' if old_value not in (None, '') else '-',
-                'new': 'CAMBIADO' if new_value not in (None, '') else '-',
-            })
+            filtered_log['changes'].append(_handle_sensitive_field(field, old_value, new_value))
             continue
 
         # Agregar solo campos relevantes
         if field not in RELEVANT_FIELDS:
             continue
 
-        old_value, new_value, field = _transform_field_values(field, old_value, new_value)
-
-        # Omitir nuevamente por si después de transformar quedan iguales.
-        if old_value == new_value:
-            continue
-
-        canonical_key = CANONICAL_FIELD_KEY.get(field, field)
-        current_priority = FIELD_PRIORITY.get(field, 0)
-
-        change_payload = {
-            'field': FIELD_LABELS.get(field, field),
-            'old': _normalize_value(old_value),
-            'new': _normalize_value(new_value),
-            '_priority': current_priority,
-        }
-
-        existing = dedup_changes.get(canonical_key)
-        if not existing or current_priority >= existing.get('_priority', -1):
-            dedup_changes[canonical_key] = change_payload
+        _process_field_change(field, old_value, new_value, dedup_changes)
 
     filtered_log['changes'].extend([
         {
