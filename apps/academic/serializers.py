@@ -147,6 +147,16 @@ class SubjectSerializer(serializers.ModelSerializer):
         return value
 
 
+class TeacherSubjectSerializer(serializers.ModelSerializer):
+    """Read-only serializer for teacher's assigned subjects (with nested units)."""
+    units = UnitSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Subject
+        fields = ['id_subject', 'name', 'level_number', 'units', 'status']
+        read_only_fields = fields
+
+
 # ---------------------------------------------------------------------------
 # Shared / auxiliary
 # ---------------------------------------------------------------------------
