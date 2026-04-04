@@ -232,8 +232,6 @@ class ExamAssignSerializer(serializers.Serializer):
             exam = Exam.objects.get(pk=value)
         except Exam.DoesNotExist:
             raise serializers.ValidationError('El examen especificado no existe.')
-        if not exam.status:
-            raise serializers.ValidationError('El examen especificado está inactivo.')
         self.context['_exam'] = exam
         return value
 
@@ -268,6 +266,7 @@ class ExamAssignmentGroupSummarySerializer(serializers.Serializer):
     """Read-only serializer showing which groups an exam is currently assigned to."""
     group_id = serializers.IntegerField()
     group_label = serializers.CharField()
+    academic_level = serializers.IntegerField()
     students_assigned = serializers.IntegerField()
     available_from = serializers.DateTimeField()
     available_to = serializers.DateTimeField()
@@ -394,6 +393,31 @@ class CreatedByMeQuerySerializer(serializers.Serializer):
     id_subject = serializers.IntegerField(required=False, allow_null=True, default=None, min_value=1)
     difficulty_level = serializers.ChoiceField(
         choices=Exam.DIFFICULTY_CHOICES,
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    search = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True,
+        default=None, max_length=100,
+    )
+
+    def validate_search(self, value):
+        if value:
+            return value.strip() or None
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Query-param input serializer for group students grades
+# ---------------------------------------------------------------------------
+
+class GroupStudentsQuerySerializer(serializers.Serializer):
+    """Validates query parameters accepted by ExamGroupStudentsView."""
+    VALID_STATUSES = ('pending', 'in_progress', 'completed')
+
+    status = serializers.ChoiceField(
+        choices=VALID_STATUSES,
         required=False,
         allow_null=True,
         default=None,

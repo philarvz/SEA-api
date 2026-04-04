@@ -34,7 +34,7 @@ class ExamService:
             secure_mode=validated_data.get('secure_mode', False),
             minimum_score=validated_data.get('minimum_score', 8),
             creation_date=timezone.now().date(),
-            status=True,
+            status=False,
         )
         exam.save()
 
@@ -63,6 +63,34 @@ class ExamService:
 
         logger.info('Exam updated | id={}', exam.pk)
         return exam
+
+    @staticmethod
+    def validate_can_activate(exam: Exam) -> list:
+        """
+        Returns a list of human-readable error messages for every condition
+        that prevents activation.  An empty list means the exam can be activated.
+
+        An exam can only be set to active when:
+          1. It has at least one question.
+          2. It has at least one group assigned.
+          3. At least one group assignment window has not yet expired.
+        """
+        errors = []
+        now = timezone.now()
+
+        if not exam.exam_questions.exists():
+            errors.append('El examen debe tener al menos una pregunta asignada.')
+
+        has_groups = exam.group_assignments.exists()
+        if not has_groups:
+            errors.append('El examen debe tener al menos un grupo asignado.')
+        elif not exam.group_assignments.filter(available_to__gte=now).exists():
+            errors.append(
+                'Todos los períodos de disponibilidad han expirado. '
+                'Reasigna los grupos con fechas válidas antes de activar el examen.'
+            )
+
+        return errors
 
     @staticmethod
     def change_status(exam: Exam, new_status: bool) -> Exam:
@@ -316,6 +344,7 @@ class ExamAssignmentService:
             result.append({
                 'group_id': row.group_id,
                 'group_label': f"{letter} (Gen {gen_year})",
+                'academic_level': row.group.academic_level,
                 'students_assigned': row.students_assigned,
                 'available_from': row.available_from,
                 'available_to': row.available_to,
@@ -418,12 +447,18 @@ class ExamAssignmentService:
         return result
 
     @staticmethod
-    def get_group_students(exam, group_id: int, status_filter: str | None = None):
+    def get_group_students(
+        exam,
+        group_id: int,
+        status_filter: str | None = None,
+        search: str | None = None,
+    ):
         """
         Return ExamAssignment queryset for a specific exam + group,
         ordered by last_name, first_name for the grades view.
         Uses select_related to resolve student data in a single query.
         Optional status_filter: 'pending' | 'in_progress' | 'completed'.
+        Optional search: case-insensitive match on first_name, last_name, or matricula.
         """
         qs = (
             ExamAssignment.objects
@@ -433,6 +468,12 @@ class ExamAssignmentService:
         )
         if status_filter:
             qs = qs.filter(status=status_filter)
+        if search:
+            qs = qs.filter(
+                Q(student__first_name__icontains=search)
+                | Q(student__last_name__icontains=search)
+                | Q(student__matricula__icontains=search)
+            )
         return qs
 
     @staticmethod

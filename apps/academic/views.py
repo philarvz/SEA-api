@@ -14,6 +14,8 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiRespon
 from drf_spectacular.types import OpenApiTypes
 
 from .models import Generation, Period, Group, Subject, Unit
+from rest_framework.throttling import UserRateThrottle
+
 from .serializers import (
     GenerationSerializer,
     PeriodSerializer,
@@ -24,10 +26,11 @@ from .serializers import (
     UnitSerializer,
     StatusUpdateSerializer,
     AssignStudentSerializer,
+    TeacherSubjectSerializer,
 )
 from .permissions import IsTeacherOrAdmin
 from .services import PeriodService
-from apps.users.models import StudentProfile
+from apps.users.models import StudentProfile, TeacherProfile
 from utils.responses import success_response, error_response
 
 
@@ -747,3 +750,69 @@ class SubjectStatusView(APIView):
             {'id_subject': subject.pk, 'status': subject.status},
             f'Materia {state} exitosamente.',
         )
+
+
+# ---------------------------------------------------------------------------
+# Teacher: my assigned subjects  (TC-001)
+# ---------------------------------------------------------------------------
+
+class _TeacherSubjectsThrottle(UserRateThrottle):
+    """Dedicated throttle scope for teacher subject listing."""
+    scope = 'teacher_subjects'
+
+
+class TeacherSubjectsView(APIView):
+    """
+    GET /api/academic/subjects/my-subjects/
+    - Teacher: returns only the subjects assigned to the authenticated teacher.
+    - Admin: returns all subjects in the system (full catalogue access).
+    Ownership is enforced implicitly for teachers: the query always uses
+    request.user.pk, so a teacher can never access another teacher's subjects.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+    throttle_classes = [_TeacherSubjectsThrottle]
+
+    @extend_schema(
+        summary='Materias del docente autenticado (o todas, si es administrador)',
+        tags=['Materias'],
+        responses={
+            200: TeacherSubjectSerializer(many=True),
+        },
+    )
+    def get(self, request):
+        role = getattr(request.user, 'role', None)
+        if role is None and request.auth is not None:
+            role = request.auth.get('role')
+
+        if role == 'admin':
+            subjects = (
+                Subject.objects.prefetch_related('units')
+                .order_by('level_number', 'name')
+            )
+            serializer = TeacherSubjectSerializer(subjects, many=True)
+            logger.info(
+                'All subjects listed by admin | user={} count={}',
+                request.user.pk, len(serializer.data),
+            )
+            return success_response({'results': serializer.data})
+
+        # Teacher path — ownership implicitly enforced via user.pk
+        try:
+            profile = TeacherProfile.objects.prefetch_related(
+                'subjects__units'
+            ).get(user_id=request.user.pk)
+        except TeacherProfile.DoesNotExist:
+            logger.info('Teacher subjects requested but no profile found | user={}', request.user.pk)
+            return success_response({'results': []})
+
+        subjects = (
+            profile.subjects
+            .prefetch_related('units')
+            .order_by('level_number', 'name')
+        )
+        serializer = TeacherSubjectSerializer(subjects, many=True)
+        logger.info(
+            'Teacher subjects listed | user={} count={}',
+            request.user.pk, len(serializer.data),
+        )
+        return success_response({'results': serializer.data})

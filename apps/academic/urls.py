@@ -21,6 +21,7 @@ from .views import (
     SubjectDetailView,
     SubjectUnitsBySubjectView,
     SubjectStatusView,
+    TeacherSubjectsView,
 )
 
 app_name = 'academic'
@@ -51,8 +52,9 @@ urlpatterns = [
     path('groups/<int:pk>/assign-student/', GroupAssignStudentView.as_view(), name='group-assign-student'),
 
     # ------------------------------------------------------------------
-    # Subject endpoints  (MAT-001 → MAT-003)
+    # Subject endpoints  (MAT-001 → MAT-003, TC-001)
     # ------------------------------------------------------------------
+    path('subjects/my-subjects/', TeacherSubjectsView.as_view(), name='teacher-subjects'),
     path('subjects/', SubjectListCreateView.as_view(), name='subject-list-create'),
     path('subjects/<int:pk>/', SubjectDetailView.as_view(), name='subject-detail'),
     path('subjects/<int:pk>/units/', SubjectUnitsBySubjectView.as_view(), name='subject-units-by-subject'),

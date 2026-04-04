@@ -139,6 +139,10 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
+# Default throttle rate shared by several authenticated endpoints (60 req/min).
+# Extracted to avoid duplicating the literal and satisfy static-analysis rules.
+_THROTTLE_RATE_STANDARD = '60/minute'
+
 # REST Framework Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -162,8 +166,9 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': config('THROTTLE_ANON_RATE', default='30/minute'),
         'user': config('THROTTLE_USER_RATE', default='120/minute'),
-        'student_assignments': config('THROTTLE_STUDENT_RATE', default='60/minute'),
-        'created_by_me': config('THROTTLE_CREATED_BY_ME_RATE', default='60/minute'),
+        'student_assignments': config('THROTTLE_STUDENT_RATE', default=_THROTTLE_RATE_STANDARD),
+        'created_by_me': config('THROTTLE_CREATED_BY_ME_RATE', default=_THROTTLE_RATE_STANDARD),
+        'teacher_subjects': config('THROTTLE_TEACHER_SUBJECTS_RATE', default=_THROTTLE_RATE_STANDARD),
     },
 }
 

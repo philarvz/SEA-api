@@ -43,14 +43,14 @@ class Exam(models.Model):
         default='medium',
         db_column='difficulty_level',
     )
-    secure_mode = models.BooleanField(default=False, db_column='secure_mode')
+    secure_mode = models.BooleanField(default=True, db_column='secure_mode')
     minimum_score = models.DecimalField(
         max_digits=5, decimal_places=2, default=8.00,
         db_column='minimum_score',
         help_text='Calificación mínima para aprobar el examen.',
     )
     creation_date = models.DateField(db_column='creation_date')
-    status = models.BooleanField(default=True)
+    status = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True, db_column='created_at', null=True)
     updated_at = models.DateTimeField(auto_now=True, db_column='updated_at', null=True)
 

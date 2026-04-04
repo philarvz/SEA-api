@@ -31,6 +31,7 @@ from .serializers import (
     ExamAssignmentGroupSummarySerializer,
     ExamGroupStatsSerializer,
     GroupStudentGradeSerializer,
+    GroupStudentsQuerySerializer,
     MyAssignmentSerializer,
     MyAssignmentQuerySerializer,
     CreatedByMeExamSerializer,
@@ -220,7 +221,19 @@ class ExamStatusView(APIView):
         if not serializer.is_valid():
             return error_response(MSG_INVALID_DATA, serializer.errors)
 
-        exam = ExamService.change_status(exam, serializer.validated_data['status'])
+        new_status = serializer.validated_data['status']
+
+        # Activation guard: verify all conditions before allowing status=True
+        if new_status:
+            errors = ExamService.validate_can_activate(exam)
+            if errors:
+                return error_response(
+                    'No se puede activar el examen porque no cumple todos los requisitos: El examen debe estar asignado a algun grupo, debe de tener al menos una pregunta, y al menos un grupo debe tener un período de disponibilidad válido.',
+                    {'requisitos': errors},
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+
+        exam = ExamService.change_status(exam, new_status)
         state = 'activado' if exam.status else 'desactivado'
         return success_response(
             {'id_exam': exam.pk, 'status': exam.status},
@@ -503,14 +516,19 @@ class ExamGroupStudentsView(APIView):
             OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
             OpenApiParameter(
                 'status', OpenApiTypes.STR,
-                description='Filtrar por estado de la asignación (pending, in_progress, completed)',
+                description='Filtrar por estado (pending, in_progress, completed)',
                 required=False,
                 enum=['pending', 'in_progress', 'completed'],
+            ),
+            OpenApiParameter(
+                'search', OpenApiTypes.STR,
+                description='Buscar por nombre, apellido o matrícula del alumno',
+                required=False,
             ),
         ],
         responses={
             200: GroupStudentGradeSerializer(many=True),
-            400: OpenApiResponse(description='Parámetro status inválido'),
+            400: OpenApiResponse(description='Parámetros inválidos'),
             403: OpenApiResponse(description='Sin permisos'),
             404: OpenApiResponse(description='Examen o grupo no encontrado'),
         },
@@ -529,16 +547,18 @@ class ExamGroupStudentsView(APIView):
         if not ExamGroupAssignment.objects.filter(exam=exam, group_id=group_id).exists():
             return error_response(MSG_GROUP_NOT_ASSIGNED, status_code=status.HTTP_404_NOT_FOUND)
 
-        # Validate optional status filter
-        VALID_STATUSES = {'pending', 'in_progress', 'completed'}
-        status_filter = request.query_params.get('status')
-        if status_filter is not None and status_filter not in VALID_STATUSES:
-            return error_response(
-                f'Estado inválido. Valores permitidos: {", ".join(sorted(VALID_STATUSES))}.',
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
+        # Validate query params via serializer (Rule 1)
+        query_serializer = GroupStudentsQuerySerializer(data=request.query_params)
+        if not query_serializer.is_valid():
+            return error_response('Parámetros inválidos.', query_serializer.errors,
+                                  status_code=status.HTTP_400_BAD_REQUEST)
 
-        assignments = ExamAssignmentService.get_group_students(exam, group_id, status_filter=status_filter)
+        assignments = ExamAssignmentService.get_group_students(
+            exam,
+            group_id,
+            status_filter=query_serializer.validated_data.get('status'),
+            search=query_serializer.validated_data.get('search'),
+        )
 
         paginator = ExamPagination()
         page = paginator.paginate_queryset(assignments, request)
