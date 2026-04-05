@@ -74,11 +74,9 @@ class AuditLogListView(APIView):
             paginated_queryset = paginator.paginate_queryset(queryset, request)
             serializer = AuditLogAdminSerializer(paginated_queryset, many=True)
 
-            # Excluir de la respuesta los registros sin cambios visibles,
-            # pero solo dentro de la página actual para evitar timeouts.
-            visible_data = [row for row in serializer.data if row.get('changes')]
-
-            return paginator.get_paginated_response(visible_data)
+            # Mantener consistencia entre metadatos de paginación y resultados:
+            # se devuelve la página tal cual fue paginada en base de datos.
+            return paginator.get_paginated_response(serializer.data)
 
         except Exception as exc:
             logger.error('Error listing audit logs | {}', exc)
