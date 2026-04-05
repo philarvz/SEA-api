@@ -1,5 +1,7 @@
 """Serializers for the Audit module."""
 
+from functools import lru_cache
+
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
@@ -113,6 +115,13 @@ def translate_operation(operation_type):
 def get_username(user_id):
     if user_id in (None, '', 'null'):
         return None
+    return _get_username_cached(str(user_id))
+
+
+@lru_cache(maxsize=2048)
+def _get_username_cached(user_id):
+    if user_id in (None, '', 'null'):
+        return None
     try:
         user = User.objects.get(pk=user_id)
         return user.username
@@ -121,6 +130,13 @@ def get_username(user_id):
 
 
 def get_group_letter(group_id):
+    if group_id in (None, '', 'null'):
+        return None
+    return _get_group_letter_cached(str(group_id))
+
+
+@lru_cache(maxsize=2048)
+def _get_group_letter_cached(group_id):
     if group_id in (None, '', 'null'):
         return None
     try:
@@ -133,6 +149,13 @@ def get_group_letter(group_id):
 def get_period_name(period_id):
     if period_id in (None, '', 'null'):
         return None
+    return _get_period_name_cached(str(period_id))
+
+
+@lru_cache(maxsize=2048)
+def _get_period_name_cached(period_id):
+    if period_id in (None, '', 'null'):
+        return None
     try:
         period = Period.objects.get(pk=period_id)
         return period.period_name
@@ -141,6 +164,13 @@ def get_period_name(period_id):
 
 
 def get_generation_label(generation_id):
+    if generation_id in (None, '', 'null'):
+        return None
+    return _get_generation_label_cached(str(generation_id))
+
+
+@lru_cache(maxsize=2048)
+def _get_generation_label_cached(generation_id):
     if generation_id in (None, '', 'null'):
         return None
     try:
@@ -152,12 +182,17 @@ def get_generation_label(generation_id):
 
 def get_app_user_name(app_user):
     if app_user and app_user not in ('anonymous', ''):
-        try:
-            user = User.objects.get(pk=app_user)
-            return user.get_full_name() or user.username
-        except (User.DoesNotExist, ValueError, TypeError):
-            return app_user
+        return _get_app_user_name_cached(str(app_user))
     return 'Usuario desconocido'
+
+
+@lru_cache(maxsize=2048)
+def _get_app_user_name_cached(app_user):
+    try:
+        user = User.objects.get(pk=app_user)
+        return user.get_full_name() or user.username
+    except (User.DoesNotExist, ValueError, TypeError):
+        return app_user
 
 
 def _normalize_value(value):
