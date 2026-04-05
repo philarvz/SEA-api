@@ -122,7 +122,7 @@ class _BaseExamOutputSerializer(serializers.ModelSerializer):
             'unit_number', 'unit_name',
             'difficulty_level', 'difficulty_label',
             'secure_mode', 'minimum_score', 'creation_date', 'status',
-            'created_at', 'updated_at',
+            'modified_at', 'modified_by',
         ]
         read_only_fields = fields
 
@@ -142,7 +142,7 @@ class ExamSerializer(_BaseExamOutputSerializer):
             'unit_number', 'unit_name',
             'difficulty_level', 'difficulty_label',
             'secure_mode', 'minimum_score', 'creation_date', 'status',
-            'created_at', 'updated_at',
+            'modified_at', 'modified_by',
         ]
         read_only_fields = fields
 
@@ -300,7 +300,7 @@ class ExamAssignmentOutputSerializer(serializers.ModelSerializer):
             'group_id', 'group_name',
             'status', 'score', 'is_passed',
             'assigned_at', 'available_from', 'available_to',
-            'attempt_date', 'created_at', 'updated_at',
+            'attempt_date', 'created_at', 'modified_at', 'modified_by',
         ]
         read_only_fields = fields
 

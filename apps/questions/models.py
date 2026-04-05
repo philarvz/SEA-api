@@ -5,8 +5,10 @@ Includes: Question, Answer
 
 from django.db import models
 
+from apps.core.base_models import BaseAuditModel
 
-class Question(models.Model):
+
+class Question(BaseAuditModel):
     """
     Model representing an exam question
     """
@@ -44,7 +46,7 @@ class Question(models.Model):
         return f"Question {self.id_question}: {self.statement[:50]}..."
 
 
-class Answer(models.Model):
+class Answer(BaseAuditModel):
     """
     Model representing a possible answer for a question
     """
