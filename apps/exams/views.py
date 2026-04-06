@@ -20,7 +20,7 @@ from openpyxl.styles import Font, Alignment
 
 from rest_framework.throttling import UserRateThrottle
 
-from .models import Exam
+from .models import Exam, ExamQuestion
 from .serializers import (
     ExamSerializer,
     ExamCreateSerializer,
@@ -36,6 +36,8 @@ from .serializers import (
     MyAssignmentQuerySerializer,
     CreatedByMeExamSerializer,
     CreatedByMeQuerySerializer,
+    ExamQuestionsReplaceSerializer,
+    serialize_exam_question_link,
 )
 from .services import ExamService, ExamAssignmentService
 from apps.academic.permissions import IsTeacherOrAdmin, IsStudent
@@ -193,6 +195,75 @@ class ExamDetailView(APIView):
             return error_response(MSG_INVALID_DATA, exc.message_dict)
 
         return success_response(ExamSerializer(exam).data, 'Examen actualizado exitosamente.')
+
+
+# ---------------------------------------------------------------------------
+# Exam ↔ Question bank (ExamQuestion)
+# ---------------------------------------------------------------------------
+
+class ExamQuestionsView(APIView):
+    """
+    GET: lista preguntas vinculadas (orden estable por id_exam_question; no es orden de examen para el alumno).
+    PUT: reemplaza el conjunto de preguntas; el orden del array solo afecta el orden de esa lista administrativa.
+    Todas las preguntas deben ser de la misma materia que el examen.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    def _get_exam(self, exam_id):
+        try:
+            return Exam.objects.select_related('id_subject', 'id_teacher').get(pk=exam_id)
+        except Exam.DoesNotExist:
+            return None
+
+    @extend_schema(
+        summary='Listar preguntas del examen',
+        tags=['Exámenes'],
+        responses={200: OpenApiResponse(description='Lista ordenada de preguntas vinculadas')},
+    )
+    def get(self, request, exam_id):
+        exam = self._get_exam(exam_id)
+        if not exam:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        eqs = (
+            exam.exam_questions.select_related('id_question')
+            .order_by('id_exam_question')
+        )
+        data = [serialize_exam_question_link(eq) for eq in eqs]
+        return success_response({'questions': data})
+
+    @extend_schema(
+        summary='Asignar / reordenar preguntas del examen',
+        tags=['Exámenes'],
+        request=ExamQuestionsReplaceSerializer,
+        responses={200: OpenApiResponse(description='Lista actualizada')},
+    )
+    def put(self, request, exam_id):
+        exam = self._get_exam(exam_id)
+        if not exam:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        serializer = ExamQuestionsReplaceSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(MSG_INVALID_DATA, serializer.errors)
+
+        try:
+            ExamService.sync_exam_questions(exam, serializer.validated_data['question_ids'])
+        except ValueError as exc:
+            logger.warning('Exam questions sync rejected | exam={} err={}', exam_id, exc)
+            return error_response(str(exc))
+
+        eqs = (
+            ExamQuestion.objects.filter(id_exam=exam)
+            .select_related('id_question')
+            .order_by('id_exam_question')
+        )
+        data = [serialize_exam_question_link(eq) for eq in eqs]
+        return success_response({'questions': data}, 'Preguntas del examen actualizadas.')
 
 
 # ---------------------------------------------------------------------------

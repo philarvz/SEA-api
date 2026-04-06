@@ -13,6 +13,7 @@ urlpatterns = [
     path('api/exams/', include('apps.exams.urls')),
     path('api/', include('apps.core.urls')),
     path('api/academic/', include('apps.academic.urls')),
+    path('api/questions/', include('apps.questions.urls')),
     path('api/users/', include('apps.users.urls')),
     path('api/audit-logs/', include('apps.audit.urls')),
     

@@ -6,7 +6,7 @@ Covers: Exam CRUD operations with academic validation.
 from rest_framework import serializers
 from django.utils import timezone
 
-from .models import Exam, ExamAssignment
+from .models import Exam, ExamAssignment, ExamQuestion
 from apps.academic.models import Subject, Unit, Group
 
 
@@ -197,6 +197,29 @@ class ExamUpdateSerializer(_ExamSubjectUnitValidatorMixin, serializers.Serialize
 class ExamStatusSerializer(serializers.Serializer):
     """Input serializer for PATCH /exams/{id}/status/."""
     status = serializers.BooleanField(required=True)
+
+
+class ExamQuestionsReplaceSerializer(serializers.Serializer):
+    """Body for PUT /exams/{id}/questions/ — reemplazo total del conjunto de preguntas vinculadas."""
+    question_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=True,
+        required=True,
+    )
+
+
+def serialize_exam_question_link(eq: ExamQuestion) -> dict:
+    """One row for GET /exams/{id}/questions/."""
+    qq = eq.id_question
+    return {
+        'id_exam_question': eq.id_exam_question,
+        'id_exam': eq.id_exam_id,
+        'id_question': qq.id_question,
+        'text': qq.statement,
+        'question_type': qq.question_type,
+        'difficulty': qq.difficulty,
+        'bloom_level': qq.bloom_level,
+    }
 
 
 # ---------------------------------------------------------------------------

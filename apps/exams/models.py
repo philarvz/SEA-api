@@ -89,9 +89,10 @@ class Exam(BaseAuditModifiedModel):
 
 class ExamQuestion(BaseAuditModel):
     """
-    Junction model relating exams with questions
-    Defines the order of questions in the exam
+    Vincula un examen con preguntas del banco. No define orden para el alumno:
+    la presentación (p. ej. aleatoria) la resuelve el endpoint de toma de examen.
     """
+
     id_exam_question = models.AutoField(
         primary_key=True,
         db_column='id_exam_question'
@@ -108,17 +109,16 @@ class ExamQuestion(BaseAuditModel):
         db_column='id_question',
         related_name='question_exams'
     )
-    question_order = models.IntegerField(db_column='question_order')
 
     class Meta:
         db_table = 'exam_question'
         verbose_name = 'Exam Question'
         verbose_name_plural = 'Exam Questions'
         unique_together = [['id_exam', 'id_question']]
-        ordering = ['id_exam', 'question_order']
+        ordering = ['id_exam', 'id_exam_question']
 
     def __str__(self):
-        return f"{self.id_exam.title} - Question {self.question_order}"
+        return f'{self.id_exam.title} — pregunta #{self.id_question_id}'
 
 
 class ExamAssignment(BaseAuditModel):
