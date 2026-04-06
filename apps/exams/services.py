@@ -33,7 +33,7 @@ class ExamService:
             difficulty_level=validated_data['difficulty_level'],
             secure_mode=validated_data.get('secure_mode', False),
             minimum_score=validated_data.get('minimum_score', 8),
-            creation_date=timezone.now().date(),
+            creation_date=timezone.now(),
             status=False,
         )
         exam.save()
@@ -96,7 +96,7 @@ class ExamService:
     def change_status(exam: Exam, new_status: bool) -> Exam:
         """Toggle the active/inactive status of an exam."""
         exam.status = new_status
-        exam.save(update_fields=['status', 'updated_at'])
+        exam.save(update_fields=['status', 'modified_at'])
         state = 'activado' if new_status else 'desactivado'
         logger.info('Exam {} | id={}', state, exam.pk)
         return exam
@@ -105,7 +105,7 @@ class ExamService:
     def change_secure_mode(exam: Exam, secure_mode: bool) -> Exam:
         """Activate or deactivate secure mode for an exam."""
         exam.secure_mode = secure_mode
-        exam.save(update_fields=['secure_mode', 'updated_at'])
+        exam.save(update_fields=['secure_mode', 'modified_at'])
         state = 'activado' if secure_mode else 'desactivado'
         logger.info('Exam secure_mode {} | id={}', state, exam.pk)
         return exam
@@ -114,7 +114,7 @@ class ExamService:
     def soft_delete(exam: Exam) -> Exam:
         """Logically delete an exam by setting status=False."""
         exam.status = False
-        exam.save(update_fields=['status', 'updated_at'])
+        exam.save(update_fields=['status', 'modified_at'])
         logger.info('Exam soft-deleted | id={}', exam.pk)
         return exam
 

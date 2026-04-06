@@ -6,8 +6,10 @@ Includes: Generation, Period, Group, Subject, Unit
 from django.db import models
 from django.core.exceptions import ValidationError
 
+from apps.core.base_models import BaseAuditModel
 
-class Generation(models.Model):
+
+class Generation(BaseAuditModel):
     """
     Academic generation (cohorte): students who enter the same year and
     progress together through the programme.
@@ -28,7 +30,7 @@ class Generation(models.Model):
         return f"Generation {self.year}"
 
 
-class Period(models.Model):
+class Period(BaseAuditModel):
     """
     Academic period: one of three annual terms (Enero-Abril, Mayo-Agosto,
     Septiembre-Diciembre).  The current period is determined dynamically by
@@ -60,7 +62,7 @@ class Period(models.Model):
         return f"{self.year} - {self.period_name}"
 
 
-class Group(models.Model):
+class Group(BaseAuditModel):
     """
     Academic group belonging to a generation.
     Tracks the group letter (A, B, C…) and the current academic level.
@@ -109,7 +111,7 @@ class Group(models.Model):
         return f"{self.academic_level}{self.group_letter} (Gen {self.id_generation.year})"
 
 
-class Subject(models.Model):
+class Subject(BaseAuditModel):
     """
     Subject associated to a specific level number.
     level_number represents the academic level where the subject is taught.
@@ -129,7 +131,7 @@ class Subject(models.Model):
         return f"{self.name} (L{self.level_number})"
 
 
-class Unit(models.Model):
+class Unit(BaseAuditModel):
     """
     Thematic unit belonging to a subject.
     """

@@ -7,8 +7,10 @@ Note: id_teacher references users.User (AbstractUser)
 from django.db import models
 from django.core.exceptions import ValidationError
 
+from apps.core.base_models import BaseAuditModel, BaseAuditModifiedModel
 
-class Exam(models.Model):
+
+class Exam(BaseAuditModifiedModel):
     """
     Model representing an exam.
     An exam is created over a subject, a valid unit within that subject,
@@ -49,10 +51,15 @@ class Exam(models.Model):
         db_column='minimum_score',
         help_text='Calificación mínima para aprobar el examen.',
     )
-    creation_date = models.DateField(db_column='creation_date')
+    creation_date = models.DateTimeField(db_column='creation_date')
     status = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True, db_column='created_at', null=True)
-    updated_at = models.DateTimeField(auto_now=True, db_column='updated_at', null=True)
+    # ``creation_date`` = instante de registro; ``updated_at`` → modified_at (auditoría).
+    modified_at = models.DateTimeField(
+        auto_now=True,
+        db_column='updated_at',
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         db_table = 'exam'
@@ -80,7 +87,7 @@ class Exam(models.Model):
         return self.name or self.title
 
 
-class ExamQuestion(models.Model):
+class ExamQuestion(BaseAuditModel):
     """
     Junction model relating exams with questions
     Defines the order of questions in the exam
@@ -114,7 +121,7 @@ class ExamQuestion(models.Model):
         return f"{self.id_exam.title} - Question {self.question_order}"
 
 
-class ExamAssignment(models.Model):
+class ExamAssignment(BaseAuditModel):
     """
     Represents the assignment of an exam to an individual student,
     generated when a teacher assigns an exam to one or more groups.
@@ -163,7 +170,7 @@ class ExamAssignment(models.Model):
         null=True, blank=True, db_column='attempt_date',
     )
     created_at = models.DateTimeField(auto_now_add=True, db_column='created_at')
-    updated_at = models.DateTimeField(auto_now=True, db_column='updated_at')
+    modified_at = models.DateTimeField(auto_now=True, db_column='updated_at')
 
     class Meta:
         db_table = 'exam_assignment'
@@ -176,7 +183,7 @@ class ExamAssignment(models.Model):
         return f"Exam {self.exam_id} → Student {self.student_id} (Group {self.group_id})"
 
 
-class ExamGroupAssignment(models.Model):
+class ExamGroupAssignment(BaseAuditModel):
     """
     Tracks group-level exam assignments (independent of students).
     Guarantees that groups with zero students still appear in queries.
@@ -197,7 +204,7 @@ class ExamGroupAssignment(models.Model):
     available_from = models.DateTimeField(db_column='available_from')
     available_to = models.DateTimeField(db_column='available_to')
     assigned_at = models.DateTimeField(auto_now_add=True, db_column='assigned_at')
-    updated_at = models.DateTimeField(auto_now=True, db_column='updated_at')
+    modified_at = models.DateTimeField(auto_now=True, db_column='updated_at')
 
     class Meta:
         db_table = 'exam_group_assignment'
