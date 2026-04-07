@@ -6,6 +6,7 @@ Covers: Generation, Period, Group, Subject and auxiliary operations.
 from rest_framework import serializers
 
 from .models import Generation, Period, Group, Subject, Unit
+from .services import PeriodService
 from apps.users.models import StudentProfile
 
 
@@ -60,10 +61,10 @@ class PeriodSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class GroupCreateSerializer(serializers.Serializer):
-    """Input serializer for POST /groups/ — id_period is resolved automatically."""
+    """Input serializer for POST /groups/."""
     id_generation = serializers.IntegerField(required=True)
     group_letter = serializers.CharField(max_length=5, required=True)
-    academic_level = serializers.IntegerField(min_value=1, required=True)
+    academic_level = serializers.IntegerField(min_value=1, required=False)
     status = serializers.BooleanField(default=True)
 
     def validate_id_generation(self, value):
@@ -83,7 +84,7 @@ class GroupCreateSerializer(serializers.Serializer):
     def validate(self, attrs):
         academic_level = attrs.get('academic_level')
         generation = self.context.get('_generation')
-        if generation and academic_level > generation.total_levels:
+        if generation and academic_level and academic_level > generation.total_levels:
             raise serializers.ValidationError({
                 'academic_level': f'El nivel académico no puede exceder {generation.total_levels} (total de niveles de la generación).'
             })
@@ -93,7 +94,7 @@ class GroupCreateSerializer(serializers.Serializer):
 class GroupUpdateSerializer(serializers.Serializer):
     """Input serializer for PUT /groups/{id}/ — generation is immutable."""
     group_letter = serializers.CharField(max_length=5, required=True)
-    academic_level = serializers.IntegerField(min_value=1, required=True)
+    academic_level = serializers.IntegerField(min_value=1, required=False)
     status = serializers.BooleanField(required=True)
 
     def validate_group_letter(self, value):
@@ -104,7 +105,10 @@ class GroupSerializer(serializers.ModelSerializer):
     """Output serializer for read operations."""
     generation_year = serializers.IntegerField(source='id_generation.year', read_only=True)
     generation_total_levels = serializers.IntegerField(source='id_generation.total_levels', read_only=True)
+    id_period = serializers.SerializerMethodField()
     period_info = serializers.SerializerMethodField()
+    academic_level = serializers.SerializerMethodField()
+    students_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Group
@@ -112,13 +116,30 @@ class GroupSerializer(serializers.ModelSerializer):
             'id_group', 'id_generation', 'generation_year',
             'generation_total_levels',
             'id_period', 'period_info',
-            'group_letter', 'academic_level', 'status',
+            'group_letter', 'academic_level', 'students_count', 'status',
         ]
 
+    def _get_current_period(self):
+        if not hasattr(self, '_cached_current_period'):
+            self._cached_current_period = PeriodService.get_current_period()
+        return self._cached_current_period
+
     def get_period_info(self, obj):
-        if obj.id_period:
-            return f"{obj.id_period.year} - {obj.id_period.period_name}"
+        current_period = self._get_current_period()
+        if current_period:
+            return f"{current_period.year} - {current_period.period_name}"
         return None
+
+    def get_id_period(self, obj):
+        current_period = self._get_current_period()
+        return current_period.pk if current_period else None
+
+    def get_academic_level(self, obj):
+        return PeriodService.sync_group_academic_level(obj)
+
+    def get_students_count(self, obj):
+        # Reuse annotation when available to avoid extra queries in list views.
+        return getattr(obj, 'students_count', obj.students.count())
 
 
 # ---------------------------------------------------------------------------

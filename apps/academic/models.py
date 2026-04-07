@@ -67,21 +67,13 @@ class Group(BaseAuditModel):
     Academic group belonging to a generation.
     Tracks the group letter (A, B, C…) and the current academic level.
     The academic_level must be between 1 and generation.total_levels.
-    The active period is automatically captured at creation time.
+    Academic level progression is derived from current date/period rules.
     """
     id_group = models.AutoField(primary_key=True, db_column='id_group')
     id_generation = models.ForeignKey(
         Generation,
         on_delete=models.RESTRICT,
         db_column='id_generation',
-        related_name='groups',
-    )
-    id_period = models.ForeignKey(
-        Period,
-        on_delete=models.RESTRICT,
-        null=True,
-        blank=True,
-        db_column='id_period',
         related_name='groups',
     )
     group_letter = models.CharField(max_length=5, db_column='group_letter')

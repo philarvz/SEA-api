@@ -5,6 +5,7 @@ Covers: user registration input validation and response shape.
 
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from apps.academic.services import PeriodService
 
 User = get_user_model()
 
@@ -216,10 +217,11 @@ class UserResponseSerializer(serializers.ModelSerializer):
             try:
                 profile = obj.student_profile
                 if profile.group:
+                    calculated_level = PeriodService.sync_group_academic_level(profile.group)
                     return {
                         'id_group': profile.group.pk,
                         'group_letter': profile.group.group_letter,
-                        'academic_level': profile.group.academic_level,
+                        'academic_level': calculated_level,
                     }
             except Exception:
                 pass
@@ -276,10 +278,11 @@ class UserListSerializer(serializers.ModelSerializer):
             try:
                 profile = obj.student_profile
                 if profile.group:
+                    calculated_level = PeriodService.sync_group_academic_level(profile.group)
                     return {
                         'id_group': profile.group.pk,
                         'group_letter': profile.group.group_letter,
-                        'academic_level': profile.group.academic_level,
+                        'academic_level': calculated_level,
                     }
             except Exception:
                 pass

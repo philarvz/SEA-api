@@ -9,6 +9,7 @@ from django.db.models import Q
 
 from .models import Exam, ExamAssignment, ExamGroupAssignment, ExamQuestion
 from apps.academic.models import Subject
+from apps.academic.services import PeriodService
 from apps.users.models import User, StudentProfile
 
 
@@ -383,10 +384,11 @@ class ExamAssignmentService:
             gen = row.group.id_generation
             gen_year = gen.year if gen else ''
             letter = row.group.group_letter
+            calculated_level = PeriodService.sync_group_academic_level(row.group)
             result.append({
                 'group_id': row.group_id,
                 'group_label': f"{letter} (Gen {gen_year})",
-                'academic_level': row.group.academic_level,
+                'academic_level': calculated_level,
                 'students_assigned': row.students_assigned,
                 'available_from': row.available_from,
                 'available_to': row.available_to,

@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from django.db import IntegrityError
+from django.db.models import Count
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
 
@@ -400,7 +401,12 @@ class GroupListCreateView(APIView):
         responses={200: GroupSerializer(many=True)},
     )
     def get(self, request):
-        queryset = Group.objects.select_related('id_generation', 'id_period').all()
+        queryset = (
+            Group.objects
+            .select_related('id_generation')
+            .annotate(students_count=Count('students'))
+            .all()
+        )
         id_generation = request.query_params.get('id_generation')
         academic_level = request.query_params.get('academic_level')
         status_param = request.query_params.get('status')
@@ -426,25 +432,27 @@ class GroupListCreateView(APIView):
             return error_response(MSG_INVALID_DATA, serializer.errors)
 
         data = serializer.validated_data
-        current_period = PeriodService.get_current_period()
 
         try:
             generation = Generation.objects.get(pk=data['id_generation'])
         except Generation.DoesNotExist:
             return error_response(MSG_GENERATION_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
+        resolved_level = PeriodService.calculate_generation_academic_level(
+            generation_year=generation.year,
+            total_levels=generation.total_levels,
+        )
+
         try:
             group = Group.objects.create(
                 id_generation=generation,
-                id_period=current_period,
                 group_letter=data['group_letter'],
-                academic_level=data['academic_level'],
+                academic_level=resolved_level,
                 status=data.get('status', True),
             )
             logger.info(
-                'Group created | id={} letter={} academic_level={} period={}',
+                'Group created | id={} letter={} academic_level={}',
                 group.pk, group.group_letter, group.academic_level,
-                current_period.pk if current_period else None,
             )
         except IntegrityError as exc:
             logger.error('IntegrityError al registrar grupo | detail={}', exc)
@@ -465,7 +473,7 @@ class GroupDetailView(APIView):
 
     def _get_group(self, pk):
         try:
-            return Group.objects.select_related('id_generation', 'id_period').get(pk=pk)
+            return Group.objects.select_related('id_generation').get(pk=pk)
         except Group.DoesNotExist:
             return None
 
@@ -495,9 +503,13 @@ class GroupDetailView(APIView):
             logger.warning('Actualización de grupo rechazada | id={} errors={}', pk, serializer.errors)
             return error_response(MSG_INVALID_DATA, serializer.errors)
         data = serializer.validated_data
+        resolved_level = PeriodService.calculate_generation_academic_level(
+            generation_year=group.id_generation.year,
+            total_levels=group.id_generation.total_levels,
+        )
         try:
             group.group_letter = data['group_letter']
-            group.academic_level = data['academic_level']
+            group.academic_level = resolved_level
             group.status = data['status']
             group.save(update_fields=['group_letter', 'academic_level', 'status'])
             logger.info('Grupo actualizado | id={}', pk)
@@ -548,7 +560,7 @@ class GroupAssignStudentView(APIView):
     )
     def post(self, request, pk):
         try:
-            group = Group.objects.select_related('id_period').get(pk=pk)
+            group = Group.objects.get(pk=pk)
         except Group.DoesNotExist:
             return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 

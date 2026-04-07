@@ -75,7 +75,6 @@ CREATE TABLE IF NOT EXISTS period (
 CREATE TABLE IF NOT EXISTS "group" (
     id_group SERIAL PRIMARY KEY,
     id_generation INT NOT NULL,
-    id_period INT NULL,
     group_letter VARCHAR(5) NOT NULL,
     academic_level INT NOT NULL CHECK (academic_level >= 1),
     status BOOLEAN NOT NULL DEFAULT TRUE,
@@ -85,11 +84,6 @@ CREATE TABLE IF NOT EXISTS "group" (
         REFERENCES generation(id_generation)
         ON DELETE RESTRICT
         ON UPDATE CASCADE,
-    CONSTRAINT fk_group_period
-        FOREIGN KEY (id_period)
-        REFERENCES period(id_period)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE
 );
 
 
