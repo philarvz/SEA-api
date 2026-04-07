@@ -7,6 +7,7 @@ from django.urls import path
 from .views import (
     ExamListCreateView,
     ExamDetailView,
+    ExamQuestionsView,
     ExamStatusView,
     ExamSecureModeView,
     ExamDeleteView,
@@ -27,6 +28,7 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path('', ExamListCreateView.as_view(), name='exam-list-create'),
     path('<int:pk>/', ExamDetailView.as_view(), name='exam-detail'),
+    path('<int:exam_id>/questions/', ExamQuestionsView.as_view(), name='exam-questions'),
     path('<int:pk>/status/', ExamStatusView.as_view(), name='exam-status'),
     path('<int:pk>/secure-mode/', ExamSecureModeView.as_view(), name='exam-secure-mode'),
     path('<int:pk>/delete/', ExamDeleteView.as_view(), name='exam-delete'),

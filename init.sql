@@ -190,7 +190,6 @@ CREATE TABLE IF NOT EXISTS exam_question (
     id_exam_question SERIAL PRIMARY KEY,
     id_exam INT NOT NULL,
     id_question INT NOT NULL,
-    question_order INT NOT NULL,
     CONSTRAINT fk_exam_question_exam
         FOREIGN KEY (id_exam)
         REFERENCES exam(id_exam)

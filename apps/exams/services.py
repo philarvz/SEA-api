@@ -65,6 +65,48 @@ class ExamService:
         return exam
 
     @staticmethod
+    def sync_exam_questions(exam: Exam, question_ids: list[int]) -> None:
+        """
+        Reemplaza los vínculos examen–pregunta. El orden del array solo determina
+        el orden estable de creación (id_exam_question); no es el orden de presentación
+        al alumno (eso se define al tomar el examen, p. ej. aleatorio).
+
+        Cada pregunta debe ser de la misma materia que el examen.
+        """
+        from django.db import transaction
+        from apps.questions.models import Question
+
+        seen: set[int] = set()
+        ordered_unique: list[int] = []
+        for qid in question_ids:
+            if qid in seen:
+                raise ValueError('La lista de preguntas contiene duplicados.')
+            seen.add(qid)
+            ordered_unique.append(qid)
+
+        with transaction.atomic():
+            ExamQuestion.objects.filter(id_exam=exam).delete()
+            for qid in ordered_unique:
+                try:
+                    q = Question.objects.get(pk=qid)
+                except Question.DoesNotExist:
+                    raise ValueError(f'La pregunta con id {qid} no existe.')
+                if q.id_subject_id != exam.id_subject_id:
+                    raise ValueError(
+                        f'La pregunta {qid} es de otra materia; el examen pertenece a la materia '
+                        f'{exam.id_subject_id} ({exam.id_subject.name}).'
+                    )
+                ExamQuestion.objects.create(
+                    id_exam=exam,
+                    id_question_id=qid,
+                )
+
+        logger.info(
+            'Exam questions synced | exam={} count={}',
+            exam.pk, len(ordered_unique),
+        )
+
+    @staticmethod
     def validate_can_activate(exam: Exam) -> list:
         """
         Returns a list of human-readable error messages for every condition
