@@ -184,6 +184,12 @@ class UserListCreateView(APIView):
             queryset = queryset.filter(status=status_bool)
             logger.debug('Filtering by status | status={}', status_bool)
 
+        # Filtro por grupo (para listar alumnos de un grupo específico)
+        group_id = request.query_params.get('group_id', None)
+        if group_id:
+            queryset = queryset.filter(student_profile__group_id=group_id)
+            logger.debug('Filtering by group_id | group_id={}', group_id)
+
         # Búsqueda por texto
         search = request.query_params.get('search', None)
         if search:
@@ -476,3 +482,99 @@ class ResetPasswordView(APIView):
                 'Error al restablecer la contraseña.',
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+# ---------------------------------------------------------------------------
+# Teacher → Eligible groups  (Scenario 2 support)
+# ---------------------------------------------------------------------------
+
+class TeacherEligibleGroupsView(APIView):
+    """
+    GET /api/users/{pk}/eligible-groups/
+    Returns active groups whose academic_level matches at least one subject
+    level_number of the given teacher.  Only admins can access this endpoint.
+
+    Response shape per item:
+        id_group, group_letter, academic_level, generation_year,
+        id_generation, subjects_at_level (list of subject names),
+        assigned_teacher (null | {id_teacher, full_name})
+    """
+    permission_classes = [IsAdmin]
+
+    @extend_schema(
+        summary='Grupos elegibles para un docente',
+        tags=['Usuarios'],
+        responses={
+            200: OpenApiResponse(description='Lista de grupos elegibles'),
+            400: OpenApiResponse(description='El usuario no es docente'),
+            404: OpenApiResponse(description='Usuario no encontrado'),
+        },
+        description=(
+            'Retorna los grupos activos cuyo nivel académico coincida con al '
+            'menos una materia asignada al docente indicado.'
+        ),
+    )
+    def get(self, request, pk):
+        try:
+            user = User.objects.select_related('teacher_profile').prefetch_related(
+                'teacher_profile__subjects'
+            ).get(pk=pk)
+        except User.DoesNotExist:
+            return error_response(MSG_USER_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if user.role != 'teacher':
+            return error_response(
+                'El usuario especificado no tiene el rol de docente.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            profile = user.teacher_profile
+        except Exception:
+            return success_response({'results': []})
+
+        subject_levels = list(
+            profile.subjects.filter(status=True).values_list('level_number', flat=True).distinct()
+        )
+        if not subject_levels:
+            return success_response({'results': []})
+
+        from apps.academic.models import Group, GroupTeacherAssignment
+        from apps.academic.services import PeriodService
+
+        groups = (
+            Group.objects
+            .filter(status=True, academic_level__in=subject_levels)
+            .select_related('id_generation')
+            .prefetch_related('teacher_assignments__teacher__user', 'teacher_assignments__subject')
+        )
+
+        results = []
+        for g in groups:
+            current_level = PeriodService.sync_group_academic_level(g)
+            subjects_at_level = [
+                s.name for s in profile.subjects.filter(level_number=current_level, status=True)
+            ]
+            assignments = [
+                {
+                    'id_assignment': a.pk,
+                    'subject': {'id_subject': a.subject.pk, 'name': a.subject.name},
+                    'teacher': {'id_teacher': a.teacher.pk, 'full_name': a.teacher.user.full_name},
+                }
+                for a in g.teacher_assignments.all()
+            ]
+            results.append({
+                'id_group': g.pk,
+                'group_letter': g.group_letter,
+                'academic_level': current_level,
+                'generation_year': g.id_generation.year,
+                'id_generation': g.id_generation.pk,
+                'subjects_at_level': subjects_at_level,
+                'assignments': assignments,
+            })
+
+        logger.info(
+            'Grupos elegibles para docente | user_id={} levels={} count={}',
+            pk, subject_levels, len(results),
+        )
+        return success_response({'results': results})

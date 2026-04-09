@@ -5,7 +5,7 @@ Covers: Generation, Period, Group, Subject and auxiliary operations.
 
 from rest_framework import serializers
 
-from .models import Generation, Period, Group, Subject, Unit
+from .models import Generation, Period, Group, Subject, Unit, GroupTeacherAssignment
 from .services import PeriodService
 from apps.users.models import StudentProfile
 
@@ -109,6 +109,7 @@ class GroupSerializer(serializers.ModelSerializer):
     period_info = serializers.SerializerMethodField()
     academic_level = serializers.SerializerMethodField()
     students_count = serializers.SerializerMethodField()
+    assignments = serializers.SerializerMethodField()
 
     class Meta:
         model = Group
@@ -116,7 +117,8 @@ class GroupSerializer(serializers.ModelSerializer):
             'id_group', 'id_generation', 'generation_year',
             'generation_total_levels',
             'id_period', 'period_info',
-            'group_letter', 'academic_level', 'students_count', 'status',
+            'group_letter', 'academic_level', 'students_count',
+            'assignments', 'status',
         ]
 
     def _get_current_period(self):
@@ -138,8 +140,27 @@ class GroupSerializer(serializers.ModelSerializer):
         return PeriodService.sync_group_academic_level(obj)
 
     def get_students_count(self, obj):
-        # Reuse annotation when available to avoid extra queries in list views.
         return getattr(obj, 'students_count', obj.students.count())
+
+    def get_assignments(self, obj):
+        try:
+            assignments = obj.teacher_assignments.select_related(
+                'teacher__user', 'subject'
+            ).all()
+            return [
+                {
+                    'id_assignment': a.pk,
+                    'subject': {'id_subject': a.subject.pk, 'name': a.subject.name},
+                    'teacher': {
+                        'id_teacher': a.teacher.pk,
+                        'full_name': a.teacher.user.full_name,
+                        'email': a.teacher.user.email,
+                    },
+                }
+                for a in assignments
+            ]
+        except Exception:
+            return []
 
 
 # ---------------------------------------------------------------------------
@@ -203,3 +224,44 @@ class AssignStudentSerializer(serializers.Serializer):
         if not student.user.is_active:
             raise serializers.ValidationError('El alumno está inactivo.')
         return value
+
+
+# ---------------------------------------------------------------------------
+# Teacher assignment to group  (M:N through GroupTeacherAssignment)
+# ---------------------------------------------------------------------------
+
+class GroupTeacherAssignmentSerializer(serializers.Serializer):
+    """Read output for a single group-teacher-subject assignment."""
+    id_assignment = serializers.IntegerField()
+    subject = serializers.SerializerMethodField()
+    teacher = serializers.SerializerMethodField()
+
+    def get_subject(self, obj):
+        return {'id_subject': obj.subject.pk, 'name': obj.subject.name}
+
+    def get_teacher(self, obj):
+        return {
+            'id_teacher': obj.teacher.pk,
+            'full_name': obj.teacher.user.full_name,
+            'email': obj.teacher.user.email,
+        }
+
+
+class CreateGroupTeacherAssignmentSerializer(serializers.Serializer):
+    """
+    Input for POST /groups/{pk}/assignments/.
+    Assigns teacher_id to teach subject_id in this group.
+    Business rules validated in the view:
+      - subject must exist and its level_number == group.academic_level
+      - teacher must have that subject assigned
+    """
+    teacher_id = serializers.IntegerField(required=True)
+    subject_id = serializers.IntegerField(required=True)
+
+
+class AvailableTeacherSerializer(serializers.Serializer):
+    """Teacher eligible for assignment to a specific subject in a group."""
+    id_teacher = serializers.IntegerField()
+    full_name = serializers.CharField()
+    email = serializers.EmailField()
+    subjects_at_level = serializers.ListField(child=serializers.CharField())
