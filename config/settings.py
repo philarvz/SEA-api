@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'apps.academic',
     'apps.questions',
     'apps.exams',
+    'apps.answers',
     'apps.audit',
 ]
 

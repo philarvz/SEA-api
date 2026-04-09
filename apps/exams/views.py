@@ -12,6 +12,7 @@ from django.http import HttpResponse
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.views import APIView
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
@@ -20,7 +21,7 @@ from openpyxl.styles import Font, Alignment
 
 from rest_framework.throttling import UserRateThrottle
 
-from .models import Exam, ExamQuestion
+from .models import Exam, ExamQuestion, ExamAssignment
 from .serializers import (
     ExamSerializer,
     ExamCreateSerializer,
@@ -207,13 +208,20 @@ class ExamQuestionsView(APIView):
     PUT: reemplaza el conjunto de preguntas; el orden del array solo afecta el orden de esa lista administrativa.
     Todas las preguntas deben ser de la misma materia que el examen.
     """
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAuthenticated]
 
     def _get_exam(self, exam_id):
         try:
             return Exam.objects.select_related('id_subject', 'id_teacher').get(pk=exam_id)
         except Exam.DoesNotExist:
             return None
+
+    def _is_student_assigned(self, request, exam):
+        """Return True if current authenticated student has this exam assigned."""
+        return ExamAssignment.objects.filter(
+            exam_id=exam.id_exam,
+            student_id=request.user.pk,
+        ).exists()
 
     @extend_schema(
         summary='Listar preguntas del examen',
@@ -224,11 +232,20 @@ class ExamQuestionsView(APIView):
         exam = self._get_exam(exam_id)
         if not exam:
             return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
-        if not _can_access_exam(request, exam):
+
+        role = _get_user_role(request)
+        if role in ('teacher', 'admin'):
+            if not _can_access_exam(request, exam):
+                return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+        elif role == 'student':
+            if not self._is_student_assigned(request, exam):
+                return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+        else:
             return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
 
         eqs = (
             exam.exam_questions.select_related('id_question')
+            .prefetch_related('id_question__answers', 'id_question__code_question')
             .order_by('id_exam_question')
         )
         data = [serialize_exam_question_link(eq) for eq in eqs]
@@ -244,6 +261,10 @@ class ExamQuestionsView(APIView):
         exam = self._get_exam(exam_id)
         if not exam:
             return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        role = _get_user_role(request)
+        if role not in ('teacher', 'admin'):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
         if not _can_access_exam(request, exam):
             return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
 
@@ -260,6 +281,7 @@ class ExamQuestionsView(APIView):
         eqs = (
             ExamQuestion.objects.filter(id_exam=exam)
             .select_related('id_question')
+            .prefetch_related('id_question__answers', 'id_question__code_question')
             .order_by('id_exam_question')
         )
         data = [serialize_exam_question_link(eq) for eq in eqs]

@@ -211,6 +211,26 @@ class ExamQuestionsReplaceSerializer(serializers.Serializer):
 def serialize_exam_question_link(eq: ExamQuestion) -> dict:
     """One row for GET /exams/{id}/questions/."""
     qq = eq.id_question
+
+    answers = []
+    if qq.question_type in ('MULTIPLE_CHOICE', 'MULTIPLE_SELECTION'):
+        answers = [
+            {
+                'id_answer': answer.id_answer,
+                'answer_text': answer.answer_text,
+            }
+            for answer in qq.answers.all().order_by('id_answer')
+        ]
+
+    code_question = None
+    if qq.question_type == 'CODE':
+        cq = getattr(qq, 'code_question', None)
+        if cq:
+            code_question = {
+                'language': cq.language,
+                'test_cases': cq.test_cases,
+            }
+
     return {
         'id_exam_question': eq.id_exam_question,
         'id_exam': eq.id_exam_id,
@@ -219,6 +239,9 @@ def serialize_exam_question_link(eq: ExamQuestion) -> dict:
         'question_type': qq.question_type,
         'difficulty': qq.difficulty,
         'bloom_level': qq.bloom_level,
+        'points': qq.points,
+        'answers': answers,
+        'code_question': code_question,
     }
 
 
