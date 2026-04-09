@@ -24,6 +24,9 @@ def _get_role(request):
     return role
 
 
+_NO_PERMISSION_MSG = 'No tiene permiso para ver estas respuestas.'
+
+
 class SubmitExamAnswersView(APIView):
     permission_classes = [IsAuthenticated, IsStudent]
 
@@ -33,45 +36,70 @@ class SubmitExamAnswersView(APIView):
             return error_response('Datos invalidos.', serializer.errors)
 
         payload = serializer.validated_data
+        now = timezone.now()
+
+        assignment, err = self._get_validated_assignment(payload, request, now)
+        if err:
+            return err
+
+        submitted_question_ids = {item['question_id'] for item in payload['answers']}
+        exam_question_ids, err = self._validate_questions(assignment, submitted_question_ids)
+        if err:
+            return err
+
+        prepared_answers, err = self._prepare_answers(payload, submitted_question_ids)
+        if err:
+            return err
+
+        result = self._save_and_grade(prepared_answers, assignment, exam_question_ids, now)
+
+        logger.info(
+            'Answers submitted | assignment={} student={} submitted={} status={}',
+            assignment.pk,
+            request.user.pk,
+            result['submitted_count'],
+            assignment.status,
+        )
+
+        return success_response(result, 'Respuestas registradas exitosamente.', status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _get_validated_assignment(payload, request, now):
         assignment = (
             ExamAssignment.objects.select_related('exam', 'student')
             .filter(pk=payload['exam_assignment_id'])
             .first()
         )
         if not assignment:
-            return error_response('Asignacion no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
-
+            return None, error_response('Asignacion no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
         if assignment.student_id != request.user.pk:
-            return error_response('No tiene permiso para responder esta asignacion.', status_code=status.HTTP_403_FORBIDDEN)
-
+            return None, error_response('No tiene permiso para responder esta asignacion.', status_code=status.HTTP_403_FORBIDDEN)
         if assignment.status == 'completed':
-            return error_response(
+            return None, error_response(
                 'La asignacion ya fue completada y no permite reenvio.',
                 status_code=status.HTTP_409_CONFLICT,
             )
-
-        now = timezone.now()
         if now < assignment.available_from or now > assignment.available_to:
-            return error_response(
+            return None, error_response(
                 'El examen no esta disponible en este momento.',
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+        return assignment, None
 
+    @staticmethod
+    def _validate_questions(assignment, submitted_question_ids):
         exam_question_ids = set(
             ExamQuestion.objects.filter(id_exam=assignment.exam)
             .values_list('id_question_id', flat=True)
         )
         if not exam_question_ids:
-            return error_response('El examen no tiene preguntas configuradas.')
-
-        submitted_question_ids = {item['question_id'] for item in payload['answers']}
-        non_assigned_questions = submitted_question_ids - exam_question_ids
-        if non_assigned_questions:
-            return error_response(
+            return None, error_response('El examen no tiene preguntas configuradas.')
+        non_assigned = submitted_question_ids - exam_question_ids
+        if non_assigned:
+            return None, error_response(
                 'Se enviaron preguntas que no pertenecen al examen.',
-                {'question_ids': sorted(non_assigned_questions)},
+                {'question_ids': sorted(non_assigned)},
             )
-
         existing_ids = set(
             StudentAnswer.objects.filter(
                 exam_assignment=assignment,
@@ -79,108 +107,113 @@ class SubmitExamAnswersView(APIView):
             ).values_list('question_id', flat=True)
         )
         if existing_ids:
-            return error_response(
+            return None, error_response(
                 'Ya existen respuestas registradas para algunas preguntas.',
                 {'question_ids': sorted(existing_ids)},
                 status_code=status.HTTP_409_CONFLICT,
             )
+        return exam_question_ids, None
 
+    @staticmethod
+    def _prepare_answers(payload, submitted_question_ids):
         questions = {
             q.id_question: q
-            for q in (
-                Question.objects.filter(id_question__in=submitted_question_ids)
-                .prefetch_related('answers')
-            )
+            for q in Question.objects.filter(id_question__in=submitted_question_ids).prefetch_related('answers')
         }
-
-        answer_options_by_question = {
-            question_id: {
-                opt.id_answer: opt
-                for opt in Answer.objects.filter(id_question_id=question_id)
-            }
-            for question_id in submitted_question_ids
+        options_map = {
+            qid: {opt.id_answer: opt for opt in Answer.objects.filter(id_question_id=qid)}
+            for qid in submitted_question_ids
         }
-
         prepared_answers = []
         for answer_payload in payload['answers']:
             question = questions.get(answer_payload['question_id'])
             if question is None:
-                return error_response(
+                return None, error_response(
                     'Pregunta no encontrada.',
                     {'question_id': answer_payload['question_id']},
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
-
-            prepared = {
-                'question': question,
-                'selected_answer': None,
-                'selected_answers': [],
-                'answer_text': None,
-                'code_answer': None,
-            }
-
-            if question.question_type == 'MULTIPLE_CHOICE':
-                selected_answer_id = answer_payload.get('selected_answer')
-                if selected_answer_id is None:
-                    return error_response(
-                        'La pregunta de opcion unica requiere selected_answer.',
-                        {'question_id': question.id_question},
-                    )
-                selected_answer = answer_options_by_question[question.id_question].get(selected_answer_id)
-                if selected_answer is None:
-                    return error_response(
-                        'La respuesta seleccionada no pertenece a la pregunta.',
-                        {'question_id': question.id_question},
-                    )
-                prepared['selected_answer'] = selected_answer
-
-            elif question.question_type == 'MULTIPLE_SELECTION':
-                selected_answer_ids = answer_payload.get('selected_answers', [])
-                if not selected_answer_ids:
-                    return error_response(
-                        'La pregunta de opcion multiple requiere selected_answers.',
-                        {'question_id': question.id_question},
-                    )
-                unique_ids = list(set(selected_answer_ids))
-                selected_options = [
-                    answer_options_by_question[question.id_question].get(answer_id)
-                    for answer_id in unique_ids
-                ]
-                if any(option is None for option in selected_options):
-                    return error_response(
-                        'Una o mas respuestas seleccionadas no pertenecen a la pregunta.',
-                        {'question_id': question.id_question},
-                    )
-                prepared['selected_answers'] = selected_options
-
-            elif question.question_type == 'OPEN':
-                answer_text = answer_payload.get('answer_text', '').strip()
-                if not answer_text:
-                    return error_response(
-                        'La pregunta abierta requiere answer_text.',
-                        {'question_id': question.id_question},
-                    )
-                prepared['answer_text'] = answer_text
-
-            elif question.question_type == 'CODE':
-                code_answer = answer_payload.get('code_answer', '').strip()
-                if not code_answer:
-                    return error_response(
-                        'La pregunta de codigo requiere code_answer.',
-                        {'question_id': question.id_question},
-                    )
-                prepared['code_answer'] = code_answer
-
-            else:
-                return error_response(
-                    'Tipo de pregunta no soportado.',
-                    {'question_id': question.id_question, 'question_type': question.question_type},
-                )
-
+            prepared, err = SubmitExamAnswersView._prepare_single_answer(answer_payload, question, options_map)
+            if err:
+                return None, err
             prepared_answers.append(prepared)
+        return prepared_answers, None
 
+    @staticmethod
+    def _prepare_single_answer(answer_payload, question, options_map):
+        prepared = {
+            'question': question,
+            'selected_answer': None,
+            'selected_answers': [],
+            'answer_text': '',
+            'code_answer': '',
+        }
+        q_type = question.question_type
+        if q_type == 'MULTIPLE_CHOICE':
+            return SubmitExamAnswersView._fill_multiple_choice(answer_payload, question, options_map, prepared)
+        if q_type == 'MULTIPLE_SELECTION':
+            return SubmitExamAnswersView._fill_multiple_selection(answer_payload, question, options_map, prepared)
+        if q_type == 'OPEN':
+            return SubmitExamAnswersView._fill_text_field(
+                answer_payload, question, 'answer_text', 'La pregunta abierta requiere answer_text.', prepared
+            )
+        if q_type == 'CODE':
+            return SubmitExamAnswersView._fill_text_field(
+                answer_payload, question, 'code_answer', 'La pregunta de codigo requiere code_answer.', prepared
+            )
+        return None, error_response(
+            'Tipo de pregunta no soportado.',
+            {'question_id': question.id_question, 'question_type': question.question_type},
+        )
+
+    @staticmethod
+    def _fill_multiple_choice(answer_payload, question, options_map, prepared):
+        selected_answer_id = answer_payload.get('selected_answer')
+        if selected_answer_id is None:
+            return None, error_response(
+                'La pregunta de opcion unica requiere selected_answer.',
+                {'question_id': question.id_question},
+            )
+        selected_answer = options_map[question.id_question].get(selected_answer_id)
+        if selected_answer is None:
+            return None, error_response(
+                'La respuesta seleccionada no pertenece a la pregunta.',
+                {'question_id': question.id_question},
+            )
+        prepared['selected_answer'] = selected_answer
+        return prepared, None
+
+    @staticmethod
+    def _fill_multiple_selection(answer_payload, question, options_map, prepared):
+        selected_ids = answer_payload.get('selected_answers', [])
+        if not selected_ids:
+            return None, error_response(
+                'La pregunta de opcion multiple requiere selected_answers.',
+                {'question_id': question.id_question},
+            )
+        unique_ids = list(set(selected_ids))
+        selected_options = [options_map[question.id_question].get(aid) for aid in unique_ids]
+        if any(opt is None for opt in selected_options):
+            return None, error_response(
+                'Una o mas respuestas seleccionadas no pertenecen a la pregunta.',
+                {'question_id': question.id_question},
+            )
+        prepared['selected_answers'] = selected_options
+        return prepared, None
+
+    @staticmethod
+    def _fill_text_field(answer_payload, question, field_key, error_msg, prepared):
+        value = answer_payload.get(field_key, '').strip()
+        if not value:
+            return None, error_response(error_msg, {'question_id': question.id_question})
+        prepared[field_key] = value
+        return prepared, None
+
+    @staticmethod
+    def _save_and_grade(prepared_answers, assignment, exam_question_ids, now):
         created_answers = []
         graded_details = []
+        score_summary = None
 
         with transaction.atomic():
             for prepared in prepared_answers:
@@ -192,56 +225,35 @@ class SubmitExamAnswersView(APIView):
                     code_answer=prepared['code_answer'],
                     selected_answer=prepared['selected_answer'],
                 )
-
                 student_answer.save()
-
                 if question.question_type == 'MULTIPLE_SELECTION':
                     student_answer.selected_answers.set(prepared['selected_answers'])
-
                 grade_result = GradingService.grade_student_answer(student_answer)
-                graded_details.append(
-                    {
-                        'question_id': question.id_question,
-                        'graded': grade_result['graded'],
-                        'is_correct': grade_result['is_correct'],
-                        'score': grade_result['score'],
-                        'feedback': grade_result.get('feedback', []),
-                    }
-                )
+                graded_details.append({
+                    'question_id': question.id_question,
+                    'graded': grade_result['graded'],
+                    'is_correct': grade_result['is_correct'],
+                    'score': grade_result['score'],
+                    'feedback': grade_result.get('feedback', []),
+                })
                 created_answers.append(student_answer)
 
             answered_count = StudentAnswer.objects.filter(exam_assignment=assignment).count()
-            total_questions = len(exam_question_ids)
-
-            assignment.status = 'completed' if answered_count >= total_questions else 'in_progress'
+            assignment.status = 'completed' if answered_count >= len(exam_question_ids) else 'in_progress'
             if assignment.attempt_date is None:
                 assignment.attempt_date = now
             assignment.save(update_fields=['status', 'attempt_date', 'modified_at'])
-
-            score_summary = None
             if assignment.status == 'completed':
                 score_summary = GradingService.recalculate_assignment_score(assignment)
 
-        logger.info(
-            'Answers submitted | assignment={} student={} submitted={} status={}',
-            assignment.pk,
-            request.user.pk,
-            len(created_answers),
-            assignment.status,
-        )
-
-        return success_response(
-            {
-                'assignment_id': assignment.pk,
-                'status': assignment.status,
-                'submitted_count': len(created_answers),
-                'total_questions': len(exam_question_ids),
-                'score_summary': score_summary,
-                'graded_answers': graded_details,
-            },
-            'Respuestas registradas exitosamente.',
-            status.HTTP_201_CREATED,
-        )
+        return {
+            'assignment_id': assignment.pk,
+            'status': assignment.status,
+            'submitted_count': len(created_answers),
+            'total_questions': len(exam_question_ids),
+            'score_summary': score_summary,
+            'graded_answers': graded_details,
+        }
 
 
 class ManualGradeAnswerView(APIView):
@@ -311,16 +323,16 @@ class AssignmentAnswersView(APIView):
 
         role = _get_role(request)
         if role == 'student' and assignment.student_id != request.user.pk:
-            return error_response('No tiene permiso para ver estas respuestas.', status_code=status.HTTP_403_FORBIDDEN)
+            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
         if role == 'student' and timezone.now() <= assignment.available_to:
             return error_response(
                 'Tus respuestas estarán disponibles cuando termine el periodo del examen.',
                 status_code=status.HTTP_403_FORBIDDEN,
             )
         if role == 'teacher' and assignment.exam.id_teacher_id != request.user.pk:
-            return error_response('No tiene permiso para ver estas respuestas.', status_code=status.HTTP_403_FORBIDDEN)
+            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
         if role not in ('student', 'teacher', 'admin'):
-            return error_response('No tiene permiso para ver estas respuestas.', status_code=status.HTTP_403_FORBIDDEN)
+            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
 
         answers = (
             StudentAnswer.objects.filter(exam_assignment=assignment)

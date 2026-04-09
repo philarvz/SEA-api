@@ -31,8 +31,8 @@ class StudentAnswer(BaseAuditModel):
         related_name='multi_selected_in_student_answers',
         blank=True,
     )
-    answer_text = models.TextField(null=True, blank=True, db_column='answer_text')
-    code_answer = models.TextField(null=True, blank=True, db_column='code_answer')
+    answer_text = models.TextField(blank=True, default='', db_column='answer_text')
+    code_answer = models.TextField(blank=True, default='', db_column='code_answer')
 
     is_correct = models.BooleanField(null=True, blank=True, db_column='is_correct')
     score = models.DecimalField(

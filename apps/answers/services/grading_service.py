@@ -14,6 +14,29 @@ from ..models import StudentAnswer
 
 class GradingService:
     SCORE_SCALE = Decimal('10.00')
+    _SAFE_BUILTINS = {
+        'abs': abs,
+        'all': all,
+        'any': any,
+        'bool': bool,
+        'dict': dict,
+        'enumerate': enumerate,
+        'float': float,
+        'int': int,
+        'len': len,
+        'list': list,
+        'max': max,
+        'min': min,
+        'pow': pow,
+        'print': print,
+        'range': range,
+        'round': round,
+        'set': set,
+        'str': str,
+        'sum': sum,
+        'tuple': tuple,
+        'zip': zip,
+    }
 
     @staticmethod
     def grade_student_answer(student_answer: StudentAnswer) -> dict[str, Any]:
@@ -140,76 +163,71 @@ class GradingService:
         }
 
     @staticmethod
-    def _run_code_test_cases(code_answer: str, test_cases: list[Any]) -> tuple[bool, list[dict[str, Any]]]:
-        safe_builtins = {
-            'abs': abs,
-            'all': all,
-            'any': any,
-            'bool': bool,
-            'dict': dict,
-            'enumerate': enumerate,
-            'float': float,
-            'int': int,
-            'len': len,
-            'list': list,
-            'max': max,
-            'min': min,
-            'pow': pow,
-            'print': print,
-            'range': range,
-            'round': round,
-            'set': set,
-            'str': str,
-            'sum': sum,
-            'tuple': tuple,
-            'zip': zip,
-        }
-
-        namespace = {'__builtins__': safe_builtins}
-        feedback: list[dict[str, Any]] = []
-
+    def _execute_user_code(code_answer: str, namespace: dict) -> str | None:
+        """Executes user code in the sandbox namespace. Returns an error message or None."""
         try:
             exec(code_answer, namespace, namespace)
+            return None
         except Exception as exc:
-            return False, [{'test_case': 0, 'error': f'Error de ejecucion del codigo: {exc}'}]
+            return f'Error de ejecucion del codigo: {exc}'
+
+    @staticmethod
+    def _is_function_test_case(test_case: dict) -> bool:
+        return 'function_name' in test_case and 'input' in test_case and 'expected_output' in test_case
+
+    @staticmethod
+    def _call_function_test(test_case: dict, namespace: dict) -> None:
+        """Invokes a named function from namespace and asserts the expected output."""
+        fn = namespace.get(test_case['function_name'])
+        if not callable(fn):
+            raise AssertionError('La funcion objetivo no existe o no es invocable.')
+        raw_input = test_case['input']
+        if isinstance(raw_input, list):
+            result = fn(*raw_input)
+        elif isinstance(raw_input, dict):
+            result = fn(**raw_input)
+        else:
+            result = fn(raw_input)
+        if result != test_case['expected_output']:
+            raise AssertionError(f"Esperado {test_case['expected_output']}, obtenido {result}")
+
+    @staticmethod
+    def _run_dict_test_case(test_case: dict, namespace: dict) -> None:
+        """Handles a dict-style test case. Raises AssertionError on failure."""
+        if 'assertion' in test_case:
+            exec(test_case['assertion'], namespace, namespace)
+        elif 'expression' in test_case and 'expected_output' in test_case:
+            result = eval(test_case['expression'], namespace, namespace)
+            if result != test_case['expected_output']:
+                raise AssertionError(f"Esperado {test_case['expected_output']}, obtenido {result}")
+        elif GradingService._is_function_test_case(test_case):
+            GradingService._call_function_test(test_case, namespace)
+        else:
+            raise AssertionError('Formato de caso de prueba no soportado.')
+
+    @staticmethod
+    def _run_single_test(test_case: Any, namespace: dict) -> None:
+        """Dispatches a single test case by type. Raises AssertionError or Exception on failure."""
+        if isinstance(test_case, str):
+            exec(test_case, namespace, namespace)
+        elif isinstance(test_case, dict):
+            GradingService._run_dict_test_case(test_case, namespace)
+        else:
+            raise AssertionError('Formato de caso de prueba no soportado.')
+
+    @staticmethod
+    def _run_code_test_cases(code_answer: str, test_cases: list[Any]) -> tuple[bool, list[dict[str, Any]]]:
+        namespace: dict = {'__builtins__': GradingService._SAFE_BUILTINS}
+        feedback: list[dict[str, Any]] = []
+
+        error = GradingService._execute_user_code(code_answer, namespace)
+        if error:
+            return False, [{'test_case': 0, 'error': error}]
 
         all_passed = True
         for index, test_case in enumerate(test_cases, start=1):
             try:
-                if isinstance(test_case, str):
-                    exec(test_case, namespace, namespace)
-                elif isinstance(test_case, dict):
-                    if 'assertion' in test_case:
-                        exec(test_case['assertion'], namespace, namespace)
-                    elif 'expression' in test_case and 'expected_output' in test_case:
-                        result = eval(test_case['expression'], namespace, namespace)
-                        if result != test_case['expected_output']:
-                            raise AssertionError(
-                                f"Esperado {test_case['expected_output']}, obtenido {result}"
-                            )
-                    elif (
-                        'function_name' in test_case
-                        and 'input' in test_case
-                        and 'expected_output' in test_case
-                    ):
-                        fn = namespace.get(test_case['function_name'])
-                        if not callable(fn):
-                            raise AssertionError('La funcion objetivo no existe o no es invocable.')
-                        raw_input = test_case['input']
-                        if isinstance(raw_input, list):
-                            result = fn(*raw_input)
-                        elif isinstance(raw_input, dict):
-                            result = fn(**raw_input)
-                        else:
-                            result = fn(raw_input)
-                        if result != test_case['expected_output']:
-                            raise AssertionError(
-                                f"Esperado {test_case['expected_output']}, obtenido {result}"
-                            )
-                    else:
-                        raise AssertionError('Formato de caso de prueba no soportado.')
-                else:
-                    raise AssertionError('Formato de caso de prueba no soportado.')
+                GradingService._run_single_test(test_case, namespace)
                 feedback.append({'test_case': index, 'status': 'passed'})
             except AssertionError as exc:
                 all_passed = False
