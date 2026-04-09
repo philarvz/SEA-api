@@ -5,6 +5,7 @@ All endpoints are restricted to users with the 'teacher' or 'admin' role.
 PATCH is reserved exclusively for status changes; full edits use PUT.
 """
 
+import random
 from io import BytesIO
 
 from loguru import logger
@@ -216,12 +217,12 @@ class ExamQuestionsView(APIView):
         except Exam.DoesNotExist:
             return None
 
-    def _is_student_assigned(self, request, exam):
-        """Return True if current authenticated student has this exam assigned."""
+    def _get_student_assignment(self, request, exam):
+        """Return assignment object for current student in the target exam, if any."""
         return ExamAssignment.objects.filter(
             exam_id=exam.id_exam,
             student_id=request.user.pk,
-        ).exists()
+        ).first()
 
     @extend_schema(
         summary='Listar preguntas del examen',
@@ -234,11 +235,13 @@ class ExamQuestionsView(APIView):
             return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
         role = _get_user_role(request)
+        student_assignment = None
         if role in ('teacher', 'admin'):
             if not _can_access_exam(request, exam):
                 return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
         elif role == 'student':
-            if not self._is_student_assigned(request, exam):
+            student_assignment = self._get_student_assignment(request, exam)
+            if not student_assignment:
                 return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
         else:
             return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
@@ -249,6 +252,13 @@ class ExamQuestionsView(APIView):
             .order_by('id_exam_question')
         )
         data = [serialize_exam_question_link(eq) for eq in eqs]
+
+        # Students receive a per-assignment shuffled order so different students
+        # get different sequences while each student keeps a stable order.
+        if role == 'student' and student_assignment and len(data) > 1:
+            rng = random.Random(f"{student_assignment.pk}-{student_assignment.student_id}-{exam.id_exam}")
+            rng.shuffle(data)
+
         return success_response({'questions': data})
 
     @extend_schema(

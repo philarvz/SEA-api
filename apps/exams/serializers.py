@@ -236,6 +236,7 @@ def serialize_exam_question_link(eq: ExamQuestion) -> dict:
         'id_exam': eq.id_exam_id,
         'id_question': qq.id_question,
         'text': qq.statement,
+        'image_url': qq.image_url,
         'question_type': qq.question_type,
         'difficulty': qq.difficulty,
         'bloom_level': qq.bloom_level,
@@ -379,6 +380,7 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
     is_available = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
     can_start = serializers.SerializerMethodField()
+    can_review = serializers.SerializerMethodField()
 
     class Meta:
         model = ExamAssignment
@@ -392,7 +394,7 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
             'status', 'score', 'is_passed',
             'assigned_at', 'available_from', 'available_to',
             'attempt_date',
-            'is_available', 'is_expired', 'can_start',
+            'is_available', 'is_expired', 'can_start', 'can_review',
         ]
         read_only_fields = fields
 
@@ -410,6 +412,9 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
         now = timezone.now()
         within_window = obj.available_from <= now <= obj.available_to
         return within_window and obj.status in ('pending', 'in_progress')
+
+    def get_can_review(self, obj):
+        return obj.status == 'completed' and timezone.now() > obj.available_to
 
 
 # ---------------------------------------------------------------------------

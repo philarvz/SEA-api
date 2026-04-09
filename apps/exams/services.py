@@ -5,7 +5,7 @@ Encapsulates business logic for exam CRUD operations.
 
 from loguru import logger
 from django.utils import timezone
-from django.db.models import Q
+from django.db.models import Q, F, Case, When, DateTimeField
 
 from .models import Exam, ExamAssignment, ExamGroupAssignment, ExamQuestion
 from apps.academic.models import Subject
@@ -406,6 +406,7 @@ class ExamAssignmentService:
         from django.db.models import Avg, Count, Max, Min
         from decimal import Decimal
 
+        ExamAssignmentService.finalize_expired_assignments_for_exam(exam)
         minimum = exam.minimum_score
 
         # --- 1. Aggregate student stats per group in one query ----------------
@@ -504,6 +505,7 @@ class ExamAssignmentService:
         Optional status_filter: 'pending' | 'in_progress' | 'completed'.
         Optional search: case-insensitive match on first_name, last_name, or matricula.
         """
+        ExamAssignmentService.finalize_expired_assignments_for_exam(exam)
         qs = (
             ExamAssignment.objects
             .filter(exam=exam, group_id=group_id)
@@ -528,6 +530,8 @@ class ExamAssignmentService:
         Optional filters: status (str|None), include_completed (bool).
         Expects params already validated by MyAssignmentQuerySerializer.
         """
+        ExamAssignmentService.finalize_expired_assignments_for_student(student_pk)
+
         queryset = ExamAssignment.objects.select_related(
             'exam', 'exam__id_subject', 'group', 'group__id_generation',
         ).filter(
@@ -546,3 +550,46 @@ class ExamAssignmentService:
             queryset = queryset.filter(status=status_param)
 
         return queryset
+
+    @staticmethod
+    def finalize_expired_assignments_for_exam(exam) -> int:
+        """
+        Auto-close overdue assignments for an exam with score 0.
+        Applies to assignments still in pending/in_progress when period already ended.
+        """
+        now = timezone.now()
+        updated = ExamAssignment.objects.filter(
+            exam=exam,
+            available_to__lt=now,
+        ).exclude(status='completed').update(
+            status='completed',
+            score=0,
+            is_passed=False,
+            attempt_date=Case(
+                When(attempt_date__isnull=True, then=F('available_to')),
+                default=F('attempt_date'),
+                output_field=DateTimeField(),
+            ),
+        )
+        return updated
+
+    @staticmethod
+    def finalize_expired_assignments_for_student(student_pk: int) -> int:
+        """
+        Auto-close overdue assignments for a student with score 0.
+        """
+        now = timezone.now()
+        updated = ExamAssignment.objects.filter(
+            student_id=student_pk,
+            available_to__lt=now,
+        ).exclude(status='completed').update(
+            status='completed',
+            score=0,
+            is_passed=False,
+            attempt_date=Case(
+                When(attempt_date__isnull=True, then=F('available_to')),
+                default=F('attempt_date'),
+                output_field=DateTimeField(),
+            ),
+        )
+        return updated

@@ -9,6 +9,7 @@ class StudentAnswerSerializer(serializers.ModelSerializer):
     selected_answers = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
     question_type = serializers.CharField(source='question.question_type', read_only=True)
     question_statement = serializers.CharField(source='question.statement', read_only=True)
+    question_image_url = serializers.CharField(source='question.image_url', read_only=True, allow_null=True)
     question_points = serializers.IntegerField(source='question.points', read_only=True)
     question_difficulty = serializers.CharField(source='question.difficulty', read_only=True)
     question_bloom_level = serializers.CharField(source='question.bloom_level', read_only=True)
@@ -36,6 +37,7 @@ class StudentAnswerSerializer(serializers.ModelSerializer):
             'question',
             'question_type',
             'question_statement',
+            'question_image_url',
             'question_points',
             'question_difficulty',
             'question_bloom_level',

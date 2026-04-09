@@ -312,6 +312,11 @@ class AssignmentAnswersView(APIView):
         role = _get_role(request)
         if role == 'student' and assignment.student_id != request.user.pk:
             return error_response('No tiene permiso para ver estas respuestas.', status_code=status.HTTP_403_FORBIDDEN)
+        if role == 'student' and timezone.now() <= assignment.available_to:
+            return error_response(
+                'Tus respuestas estarán disponibles cuando termine el periodo del examen.',
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
         if role == 'teacher' and assignment.exam.id_teacher_id != request.user.pk:
             return error_response('No tiene permiso para ver estas respuestas.', status_code=status.HTTP_403_FORBIDDEN)
         if role not in ('student', 'teacher', 'admin'):
@@ -324,4 +329,12 @@ class AssignmentAnswersView(APIView):
             .order_by('id_student_answer')
         )
         data = StudentAnswerSerializer(answers, many=True).data
-        return success_response({'assignment_id': assignment.pk, 'answers': data})
+        return success_response(
+            {
+                'assignment_id': assignment.pk,
+                'exam_name': assignment.exam.name,
+                'exam_title': assignment.exam.title,
+                'student_name': assignment.student.full_name,
+                'answers': data,
+            }
+        )
