@@ -79,6 +79,13 @@ class UserListCreateView(APIView):
                 description='Buscar por nombre, apellido, matrícula o email',
                 required=False,
             ),
+            OpenApiParameter(
+                name='group',
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description='Filtrar estudiantes por ID de grupo (solo aplica cuando role=student)',
+                required=False,
+            ),
         ],
         responses={
             200: UserListSerializer(many=True),
@@ -88,7 +95,7 @@ class UserListCreateView(APIView):
         description=(
             'Obtiene un listado paginado de todos los usuarios del sistema. '
             'Solo los administradores pueden acceder. '
-            'Soporta filtros por rol, estado y búsqueda por texto.'
+            'Soporta filtros por rol, estado, grupo (para estudiantes) y búsqueda por texto.'
         ),
     )
     def get(self, request):
@@ -183,6 +190,19 @@ class UserListCreateView(APIView):
             status_bool = status_param.lower() == 'true'
             queryset = queryset.filter(status=status_bool)
             logger.debug('Filtering by status | status={}', status_bool)
+
+        # Filtro por grupo (solo para estudiantes)
+        group = request.query_params.get('group', None)
+        if group:
+            try:
+                group_id = int(group)
+                queryset = queryset.filter(
+                    role='student',
+                    student_profile__group_id=group_id
+                )
+                logger.debug('Filtering by group | group_id={}', group_id)
+            except ValueError:
+                logger.warning('Invalid group parameter | group={}', group)
 
         # Búsqueda por texto
         search = request.query_params.get('search', None)
