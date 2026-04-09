@@ -5,7 +5,7 @@ All endpoints are restricted to users with the 'teacher' or 'admin' role.
 PATCH is reserved exclusively for status changes; full edits use PUT.
 """
 
-import random
+import hashlib
 from io import BytesIO
 
 from loguru import logger
@@ -86,6 +86,28 @@ def _get_user_role(request):
     if role is None and request.auth is not None:
         role = request.auth.get('role')
     return role
+
+
+def _deterministic_shuffle(items, seed_str):
+    """
+    Deterministically reorder items based on a seed string using cryptographic hashing.
+    This provides reproducible shuffling without using pseudorandom generators.
+    Each unique seed produces a unique but consistent order.
+    """
+    if len(items) <= 1:
+        return items
+    
+    # Create a list of (item, sort_key) tuples
+    indexed_items = []
+    for i, item in enumerate(items):
+        # Generate a hash-based sort key for each item
+        hash_input = f"{seed_str}-{i}".encode('utf-8')
+        hash_value = hashlib.sha256(hash_input).hexdigest()
+        indexed_items.append((item, hash_value))
+    
+    # Sort by hash value to get deterministic ordering
+    indexed_items.sort(key=lambda x: x[1])
+    return [item for item, _ in indexed_items]
 
 
 def _can_access_exam(request, exam):
@@ -256,8 +278,8 @@ class ExamQuestionsView(APIView):
         # Students receive a per-assignment shuffled order so different students
         # get different sequences while each student keeps a stable order.
         if role == 'student' and student_assignment and len(data) > 1:
-            rng = random.Random(f"{student_assignment.pk}-{student_assignment.student_id}-{exam.id_exam}")
-            rng.shuffle(data)
+            seed = f"{student_assignment.pk}-{student_assignment.student_id}-{exam.id_exam}"
+            data = _deterministic_shuffle(data, seed)
 
         return success_response({'questions': data})
 
