@@ -68,6 +68,7 @@ class Group(BaseAuditModel):
     Tracks the group letter (A, B, C…) and the current academic level.
     The academic_level must be between 1 and generation.total_levels.
     Academic level progression is derived from current date/period rules.
+    Teacher assignments are managed through GroupTeacherAssignment (M:N through).
     """
     id_group = models.AutoField(primary_key=True, db_column='id_group')
     id_generation = models.ForeignKey(
@@ -141,3 +142,42 @@ class Unit(BaseAuditModel):
         db_table = 'unit'
         verbose_name = 'Unit'
         verbose_name_plural = 'Units'
+
+    def __str__(self):
+        return f"Unit {self.unit_number}: {self.unit_name}"
+
+
+class GroupTeacherAssignment(BaseAuditModel):
+    """
+    Many-to-many assignment between a Group and a TeacherProfile via a Subject.
+    Each subject in a group has at most one teacher (unique_together on group+subject).
+    A group can have multiple teachers — one per subject at its academic level.
+    """
+    id_assignment = models.AutoField(primary_key=True, db_column='id_assignment')
+    group = models.ForeignKey(
+        Group,
+        on_delete=models.CASCADE,
+        db_column='group_id',
+        related_name='teacher_assignments',
+    )
+    teacher = models.ForeignKey(
+        'users.TeacherProfile',
+        on_delete=models.CASCADE,
+        db_column='teacher_id',
+        related_name='group_assignments',
+    )
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.CASCADE,
+        db_column='subject_id',
+        related_name='group_assignments',
+    )
+
+    class Meta:
+        db_table = 'group_teacher_assignment'
+        verbose_name = 'Group Teacher Assignment'
+        verbose_name_plural = 'Group Teacher Assignments'
+        unique_together = [['group', 'subject']]  # one teacher per subject per group
+
+    def __str__(self):
+        return f"{self.group} | {self.subject.name} → {self.teacher}"

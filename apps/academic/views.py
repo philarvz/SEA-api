@@ -14,7 +14,7 @@ from django.db.models import Count
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
 
-from .models import Generation, Period, Group, Subject, Unit
+from .models import Generation, Period, Group, Subject, Unit, GroupTeacherAssignment
 from rest_framework.throttling import UserRateThrottle
 
 from .serializers import (
@@ -27,6 +27,8 @@ from .serializers import (
     UnitSerializer,
     StatusUpdateSerializer,
     AssignStudentSerializer,
+    CreateGroupTeacherAssignmentSerializer,
+    AvailableTeacherSerializer,
     TeacherSubjectSerializer,
 )
 from .permissions import IsTeacherOrAdmin
@@ -404,6 +406,7 @@ class GroupListCreateView(APIView):
         queryset = (
             Group.objects
             .select_related('id_generation')
+            .prefetch_related('teacher_assignments__teacher__user', 'teacher_assignments__subject')
             .annotate(students_count=Count('students'))
             .all()
         )
@@ -473,7 +476,9 @@ class GroupDetailView(APIView):
 
     def _get_group(self, pk):
         try:
-            return Group.objects.select_related('id_generation').get(pk=pk)
+            return Group.objects.select_related('id_generation').prefetch_related(
+                'teacher_assignments__teacher__user', 'teacher_assignments__subject'
+            ).get(pk=pk)
         except Group.DoesNotExist:
             return None
 
@@ -596,6 +601,344 @@ class GroupAssignStudentView(APIView):
             {'id_person': student.pk, 'id_group': group.pk},
             'Alumno asignado al grupo exitosamente.',
         )
+
+
+# ---------------------------------------------------------------------------
+# Group ↔ Teacher assignments  (M:N via GroupTeacherAssignment)
+# ---------------------------------------------------------------------------
+
+class GroupAssignmentsView(APIView):
+    """
+    GET  /api/academic/groups/{pk}/assignments/  — list all subject-teacher assignments
+    POST /api/academic/groups/{pk}/assignments/  — create one assignment
+        Body: { teacher_id: int, subject_id: int }
+    Business rules for POST:
+      - Group must be active.
+      - Subject must belong to this group's current academic_level.
+      - Teacher must be active, have role=teacher, and have that subject assigned.
+      - Replaces existing assignment for the same subject (upsert behaviour).
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Listar asignaciones docente-materia de un grupo',
+        tags=['Grupos'],
+        responses={200: OpenApiResponse(description='Lista de asignaciones')},
+    )
+    def get(self, request, pk):
+        try:
+            group = Group.objects.get(pk=pk)
+        except Group.DoesNotExist:
+            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+
+        assignments = (
+            GroupTeacherAssignment.objects
+            .filter(group=group)
+            .select_related('teacher__user', 'subject')
+        )
+        data = [
+            {
+                'id_assignment': a.pk,
+                'subject': {'id_subject': a.subject.pk, 'name': a.subject.name},
+                'teacher': {
+                    'id_teacher': a.teacher.pk,
+                    'full_name': a.teacher.user.full_name,
+                    'email': a.teacher.user.email,
+                },
+            }
+            for a in assignments
+        ]
+        return success_response({'results': data})
+
+    @extend_schema(
+        summary='Asignar docente a una materia del grupo',
+        tags=['Grupos'],
+        request=CreateGroupTeacherAssignmentSerializer,
+        responses={
+            200: OpenApiResponse(description='Asignación creada o actualizada'),
+            400: OpenApiResponse(description='Error de validación de negocio'),
+            404: OpenApiResponse(description='No encontrado'),
+        },
+    )
+    def post(self, request, pk):
+        try:
+            group = Group.objects.select_related('id_generation').get(pk=pk)
+        except Group.DoesNotExist:
+            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+
+        if not group.status:
+            return error_response('No se puede asignar docentes a un grupo inactivo.', status_code=status.HTTP_400_BAD_REQUEST)
+
+        serializer = CreateGroupTeacherAssignmentSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response('Datos inválidos.', serializer.errors)
+
+        teacher_id = serializer.validated_data['teacher_id']
+        subject_id = serializer.validated_data['subject_id']
+
+        # Validate subject exists and belongs to group's level
+        try:
+            subject = Subject.objects.get(pk=subject_id, status=True)
+        except Subject.DoesNotExist:
+            return error_response('La materia especificada no existe o está inactiva.', status_code=status.HTTP_404_NOT_FOUND)
+
+        current_level = PeriodService.sync_group_academic_level(group)
+        if subject.level_number != current_level:
+            return error_response(
+                f'La materia "{subject.name}" pertenece al nivel {subject.level_number}, '
+                f'pero este grupo está en el nivel {current_level}.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate teacher
+        try:
+            teacher = TeacherProfile.objects.select_related('user').prefetch_related('subjects').get(pk=teacher_id)
+        except TeacherProfile.DoesNotExist:
+            return error_response('El docente especificado no existe.', status_code=status.HTTP_404_NOT_FOUND)
+
+        if not teacher.user.is_active or teacher.user.role != 'teacher':
+            return error_response('El docente no está activo o no tiene el rol correcto.', status_code=status.HTTP_400_BAD_REQUEST)
+
+        if not teacher.subjects.filter(pk=subject_id, status=True).exists():
+            return error_response(
+                f'El docente no imparte la materia "{subject.name}".',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Upsert: replace existing assignment for this subject in this group
+        assignment, created = GroupTeacherAssignment.objects.update_or_create(
+            group=group,
+            subject=subject,
+            defaults={'teacher': teacher},
+        )
+        action = 'creada' if created else 'actualizada'
+        logger.info('Asignación {} | group_id={} subject_id={} teacher_id={}', action, pk, subject_id, teacher_id)
+        return success_response(
+            {
+                'id_assignment': assignment.pk,
+                'subject': {'id_subject': subject.pk, 'name': subject.name},
+                'teacher': {
+                    'id_teacher': teacher.pk,
+                    'full_name': teacher.user.full_name,
+                    'email': teacher.user.email,
+                },
+            },
+            f'Asignación {action} exitosamente.',
+        )
+
+
+class GroupAssignmentDetailView(APIView):
+    """
+    DELETE /api/academic/groups/{pk}/assignments/{a_pk}/
+    Removes a specific teacher-subject assignment from a group.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Eliminar asignación docente-materia de un grupo',
+        tags=['Grupos'],
+        responses={200: OpenApiResponse(description='Asignación eliminada'), 404: OpenApiResponse(description='No encontrada')},
+    )
+    def delete(self, request, pk, a_pk):
+        try:
+            assignment = GroupTeacherAssignment.objects.select_related(
+                'group', 'subject', 'teacher__user'
+            ).get(pk=a_pk, group_id=pk)
+        except GroupTeacherAssignment.DoesNotExist:
+            return error_response('Asignación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+
+        assignment.delete()
+        logger.info('Asignación eliminada | group_id={} assignment_id={}', pk, a_pk)
+        return success_response({'id_assignment': a_pk}, 'Asignación eliminada exitosamente.')
+
+
+class GroupAvailableTeachersView(APIView):
+    """
+    GET /api/academic/groups/{pk}/available-teachers/?subject_id=X
+    Returns teachers eligible to teach a specific subject in this group.
+    subject_id is required. The subject must match the group's current academic_level.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Listar docentes disponibles para una materia en un grupo',
+        tags=['Grupos'],
+        parameters=[OpenApiParameter('subject_id', OpenApiTypes.INT, description='ID de materia requerido', required=True)],
+        responses={200: AvailableTeacherSerializer(many=True), 400: OpenApiResponse(description='subject_id requerido'), 404: OpenApiResponse(description='No encontrado')},
+    )
+    def get(self, request, pk):
+        try:
+            group = Group.objects.select_related('id_generation').get(pk=pk)
+        except Group.DoesNotExist:
+            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+
+        subject_id = request.query_params.get('subject_id')
+        if not subject_id:
+            return error_response('El parámetro subject_id es requerido.', status_code=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            subject = Subject.objects.get(pk=subject_id, status=True)
+        except Subject.DoesNotExist:
+            return error_response('La materia especificada no existe.', status_code=status.HTTP_404_NOT_FOUND)
+
+        current_level = PeriodService.sync_group_academic_level(group)
+        if subject.level_number != current_level:
+            return error_response(
+                f'La materia "{subject.name}" no corresponde al nivel {current_level} del grupo.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        eligible_teachers = (
+            TeacherProfile.objects
+            .filter(
+                user__is_active=True,
+                user__role='teacher',
+                subjects__pk=subject_id,
+                subjects__status=True,
+            )
+            .distinct()
+            .select_related('user')
+        )
+
+        results = [
+            {
+                'id_teacher': tp.pk,
+                'full_name': tp.user.full_name,
+                'email': tp.user.email,
+            }
+            for tp in eligible_teachers
+        ]
+        logger.info('Docentes disponibles para materia | group_id={} subject_id={} count={}', pk, subject_id, len(results))
+        return success_response({'results': results})
+
+
+class GroupStudentsView(APIView):
+    """
+    GET /api/academic/groups/{pk}/students/
+    Returns a paginated list of students in a group.
+    - Admin: unrestricted.
+    - Teacher: only groups they are assigned to (via GroupTeacherAssignment).
+    Response fields: id_user, full_name, matricula, email.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Alumnos de un grupo',
+        tags=['Grupos'],
+        parameters=[
+            OpenApiParameter('page', OpenApiTypes.INT, description='N\u00famero de p\u00e1gina', required=False),
+            OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por p\u00e1gina', required=False),
+        ],
+        responses={200: OpenApiResponse(description='Lista paginada de alumnos')},
+    )
+    def get(self, request, pk):
+        try:
+            group = Group.objects.get(pk=pk)
+        except Group.DoesNotExist:
+            return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        # Teachers can only see students from groups they are assigned to
+        role = getattr(request.user, 'role', None)
+        if role is None and request.auth is not None:
+            role = request.auth.get('role')
+        if role == 'teacher':
+            assigned = GroupTeacherAssignment.objects.filter(
+                group_id=pk,
+                teacher__user_id=request.user.id,
+            ).exists()
+            if not assigned:
+                return error_response(
+                    'No tienes acceso a los alumnos de este grupo.',
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
+
+        students_qs = (
+            StudentProfile.objects
+            .filter(group_id=pk)
+            .select_related('user')
+            .order_by('user__last_name', 'user__first_name')
+        )
+
+        paginator = CatalogPagination()
+        page = paginator.paginate_queryset(students_qs, request)
+        page_size = paginator.get_page_size(request) or paginator.page_size
+
+        results = [
+            {
+                'id_user': sp.user.pk,
+                'full_name': sp.user.full_name,
+                'matricula': sp.user.matricula or '',
+                'email': sp.user.email,
+            }
+            for sp in page
+        ]
+
+        payload = {
+            'results': results,
+            'pagination': {
+                'count': paginator.page.paginator.count,
+                'page': paginator.page.number,
+                'page_size': page_size,
+                'total_pages': paginator.page.paginator.num_pages,
+                'next': paginator.get_next_link(),
+                'previous': paginator.get_previous_link(),
+            },
+        }
+        logger.info('Alumnos de grupo | group_id={} count={}', pk, paginator.page.paginator.count)
+        return success_response(payload)
+
+
+class TeacherMyGroupsView(APIView):
+    """
+    GET /api/academic/groups/my-groups/?subject_id=X
+    Returns groups where the authenticated teacher is assigned to teach.
+    subject_id is optional — filters to groups assigned for that specific subject.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Grupos donde el docente imparte clases',
+        tags=['Grupos'],
+        parameters=[
+            OpenApiParameter('subject_id', OpenApiTypes.INT, description='Filtrar por materia', required=False),
+            OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
+            OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
+        ],
+        responses={200: OpenApiResponse(description='Lista de grupos del docente')},
+    )
+    def get(self, request):
+        try:
+            profile = TeacherProfile.objects.get(user_id=request.user.id)
+        except TeacherProfile.DoesNotExist:
+            return success_response({'results': [], 'pagination': {'count': 0, 'page': 1, 'page_size': 10, 'total_pages': 1}})
+
+        subject_id = request.query_params.get('subject_id')
+
+        assignments_qs = (
+            GroupTeacherAssignment.objects
+            .filter(teacher=profile)
+            .select_related('group__id_generation', 'subject')
+            .annotate(_student_count=Count('group__students'))
+        )
+        if subject_id:
+            assignments_qs = assignments_qs.filter(subject_id=subject_id)
+
+        results = []
+        for a in assignments_qs:
+            g = a.group
+            results.append({
+                'id_group': g.pk,
+                'group_letter': g.group_letter,
+                'academic_level': g.academic_level,
+                'generation_year': g.id_generation.year,
+                'id_generation': g.id_generation.pk,
+                'students_count': a._student_count,
+                'subject': {'id_subject': a.subject.pk, 'name': a.subject.name},
+                'status': g.status,
+            })
+
+        logger.info('Mis grupos | user={} subject_id={} count={}', request.user.pk, subject_id, len(results))
+        return success_response({'results': results})
 
 
 # ---------------------------------------------------------------------------

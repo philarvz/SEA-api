@@ -17,6 +17,11 @@ from .views import (
     GroupDetailView,
     GroupStatusView,
     GroupAssignStudentView,
+    GroupAssignmentsView,
+    GroupAssignmentDetailView,
+    GroupAvailableTeachersView,
+    GroupStudentsView,
+    TeacherMyGroupsView,
     SubjectListCreateView,
     SubjectDetailView,
     SubjectUnitsBySubjectView,
@@ -47,9 +52,14 @@ urlpatterns = [
     # Group endpoints  (GG-001 → GG-004)
     # ------------------------------------------------------------------
     path('groups/', GroupListCreateView.as_view(), name='group-list-create'),
+    path('groups/my-groups/', TeacherMyGroupsView.as_view(), name='teacher-my-groups'),
     path('groups/<int:pk>/', GroupDetailView.as_view(), name='group-detail'),
     path('groups/<int:pk>/status/', GroupStatusView.as_view(), name='group-status'),
     path('groups/<int:pk>/assign-student/', GroupAssignStudentView.as_view(), name='group-assign-student'),
+    path('groups/<int:pk>/assignments/', GroupAssignmentsView.as_view(), name='group-assignments'),
+    path('groups/<int:pk>/assignments/<int:a_pk>/', GroupAssignmentDetailView.as_view(), name='group-assignment-detail'),
+    path('groups/<int:pk>/available-teachers/', GroupAvailableTeachersView.as_view(), name='group-available-teachers'),
+    path('groups/<int:pk>/students/', GroupStudentsView.as_view(), name='group-students'),
 
     # ------------------------------------------------------------------
     # Subject endpoints  (MAT-001 → MAT-003, TC-001)
