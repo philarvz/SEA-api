@@ -211,14 +211,38 @@ class ExamQuestionsReplaceSerializer(serializers.Serializer):
 def serialize_exam_question_link(eq: ExamQuestion) -> dict:
     """One row for GET /exams/{id}/questions/."""
     qq = eq.id_question
+
+    answers = []
+    if qq.question_type in ('MULTIPLE_CHOICE', 'MULTIPLE_SELECTION'):
+        answers = [
+            {
+                'id_answer': answer.id_answer,
+                'answer_text': answer.answer_text,
+            }
+            for answer in qq.answers.all().order_by('id_answer')
+        ]
+
+    code_question = None
+    if qq.question_type == 'CODE':
+        cq = getattr(qq, 'code_question', None)
+        if cq:
+            code_question = {
+                'language': cq.language,
+                'test_cases': cq.test_cases,
+            }
+
     return {
         'id_exam_question': eq.id_exam_question,
         'id_exam': eq.id_exam_id,
         'id_question': qq.id_question,
         'text': qq.statement,
+        'image_url': qq.image_url,
         'question_type': qq.question_type,
         'difficulty': qq.difficulty,
         'bloom_level': qq.bloom_level,
+        'points': qq.points,
+        'answers': answers,
+        'code_question': code_question,
     }
 
 
@@ -356,6 +380,7 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
     is_available = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
     can_start = serializers.SerializerMethodField()
+    can_review = serializers.SerializerMethodField()
 
     class Meta:
         model = ExamAssignment
@@ -369,7 +394,7 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
             'status', 'score', 'is_passed',
             'assigned_at', 'available_from', 'available_to',
             'attempt_date',
-            'is_available', 'is_expired', 'can_start',
+            'is_available', 'is_expired', 'can_start', 'can_review',
         ]
         read_only_fields = fields
 
@@ -387,6 +412,9 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
         now = timezone.now()
         within_window = obj.available_from <= now <= obj.available_to
         return within_window and obj.status in ('pending', 'in_progress')
+
+    def get_can_review(self, obj):
+        return obj.status == 'completed' and timezone.now() > obj.available_to
 
 
 # ---------------------------------------------------------------------------
