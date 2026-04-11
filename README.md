@@ -206,7 +206,89 @@ Accede a:
 
 ---
 
-## 📖 Documentación API
+## � Gestión de Periodos Académicos
+
+### Periodos Automáticos
+
+El sistema maneja **tres periodos académicos fijos** por año:
+
+- **Enero-Abril**: 1 de enero al 30 de abril
+- **Mayo-Agosto**: 1 de mayo al 31 de agosto
+- **Septiembre-Diciembre**: 1 de septiembre al 31 de diciembre
+
+Las fechas se calculan automáticamente. Solo necesitas registrar el **año** y el **nombre del periodo**.
+
+### Generar Periodos
+
+Usa el script helper para crear periodos de múltiples años:
+
+```bash
+# Generar periodos para un año específico
+python scripts/generate_periods.py --year 2025
+
+# Generar periodos para un rango de años
+python scripts/generate_periods.py --start-year 2024 --end-year 2026
+```
+
+Este script crea automáticamente los tres periodos para cada año, sin necesidad de ingresar fechas manualmente.
+
+### Avance Automático de Niveles Académicos
+
+El sistema incrementa automáticamente el nivel académico (`academic_level`) de todos los grupos al inicio de cada periodo mediante un **management command programado**:
+
+```bash
+# Ejecutar manualmente (producción)
+python manage.py advance_academic_levels
+
+# Probar sin hacer cambios (dry-run)
+python manage.py advance_academic_levels --dry-run
+```
+
+#### Configurar Ejecución Automática
+
+**En Linux (Cron):**
+
+Edita el crontab:
+```bash
+crontab -e
+```
+
+Agrega las siguientes líneas para ejecutar automáticamente a las 12:00 AM del 1 de enero, mayo y septiembre:
+```cron
+0 0 1 1 * /ruta/al/entorno/python /ruta/al/proyecto/manage.py advance_academic_levels
+0 0 1 5 * /ruta/al/entorno/python /ruta/al/proyecto/manage.py advance_academic_levels
+0 0 1 9 * /ruta/al/entorno/python /ruta/al/proyecto/manage.py advance_academic_levels
+```
+
+**En Windows (Task Scheduler):**
+
+1. Abre **Programador de tareas** (Task Scheduler)
+2. Crea tres tareas programadas:
+   - **Nombre**: `SEA_Advance_January`
+   - **Desencadenador**: 1 de enero a las 00:00, repetir cada año
+   - **Acción**: Ejecutar programa
+     - Programa: `C:\Python39\python.exe` (ruta a tu Python)
+     - Argumentos: `manage.py advance_academic_levels`
+     - Iniciar en: `C:\ruta\al\proyecto\SEA-api`
+   
+3. Repite para mayo (5/1) y septiembre (9/1)
+
+#### Funcionamiento
+
+El comando:
+- Detecta el periodo actual basado en la fecha de ejecución
+- Calcula el nuevo nivel académico de cada grupo usando la fórmula:
+  ```
+  academic_level = ((año_actual - año_generación) * 3) + (índice_periodo_actual - índice_periodo_inicio) + 1
+  ```
+- Actualiza el nivel de cada grupo, respetando el límite `total_levels` de su generación
+- Registra todos los cambios en los logs
+
+> **Nota**: El comando valida que se ejecute en el primer día de un periodo (1/ene, 1/may, 1/sep) y emite una advertencia si no es así.
+
+---
+
+## �� Documentación API
 
 ### Swagger UI (Interactivo)
 

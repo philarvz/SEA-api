@@ -211,7 +211,6 @@ class PeriodListCreateView(APIView):
         summary='Listar periodos académicos',
         tags=['Periodos'],
         parameters=[
-            OpenApiParameter('year', OpenApiTypes.INT, description='Filtrar por año', required=False),
             OpenApiParameter('status', OpenApiTypes.BOOL, description='Filtrar por estado', required=False),
             OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
             OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
@@ -220,33 +219,31 @@ class PeriodListCreateView(APIView):
     )
     def get(self, request):
         queryset = Period.objects.all()
-        year = request.query_params.get('year')
         status_param = request.query_params.get('status')
-        if year:
-            queryset = queryset.filter(year=year)
         if status_param is not None:
             queryset = queryset.filter(status=status_param.lower() in ('true', '1'))
         logger.info('Periodos consultados | count={}', queryset.count())
         return paginated_success_response(request, queryset, PeriodSerializer)
 
     @extend_schema(
-        summary='Registrar periodo académico',
+        summary='Registrar periodo académico (solo nombre)',
         tags=['Periodos'],
         request=PeriodSerializer,
         responses={201: PeriodSerializer},
     )
     def post(self, request):
+        # Only accept period_name; dates are auto-calculated from current year
         serializer = PeriodSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Registro de periodo rechazado | errors={}', serializer.errors)
             return error_response(MSG_INVALID_DATA, serializer.errors)
         try:
             instance = serializer.save()
-            logger.info('Periodo registrado | id={} year={} name={}', instance.pk, instance.year, instance.period_name)
+            logger.info('Periodo registrado | id={} name={}', instance.pk, instance.period_name)
         except IntegrityError as exc:
             logger.error('IntegrityError al registrar periodo | detail={}', exc)
             return error_response(
-                'Ya existe un periodo con ese nombre para el año indicado.',
+                'Ya existe un periodo con ese nombre.',
                 status_code=status.HTTP_409_CONFLICT,
             )
         return success_response(serializer.data, 'Periodo registrado exitosamente.', status.HTTP_201_CREATED)
@@ -296,7 +293,7 @@ class PeriodDetailView(APIView):
         return success_response(PeriodSerializer(period).data)
 
     @extend_schema(
-        summary='Actualizar periodo académico',
+        summary='Actualizar periodo académico (solo año y nombre)',
         tags=['Periodos'],
         request=PeriodSerializer,
         responses={200: PeriodSerializer, 404: OpenApiResponse(description='No encontrado')},
@@ -305,6 +302,7 @@ class PeriodDetailView(APIView):
         period = self._get_period(pk)
         if not period:
             return error_response(MSG_PERIOD_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+        # Only accept year and period_name; dates are auto-calculated
         serializer = PeriodSerializer(period, data=request.data)
         if not serializer.is_valid():
             logger.warning('Actualización de periodo rechazada | id={} errors={}', pk, serializer.errors)
@@ -396,6 +394,7 @@ class GroupListCreateView(APIView):
         parameters=[
             OpenApiParameter('id_generation', OpenApiTypes.INT, description='Filtrar por generación', required=False),
             OpenApiParameter('academic_level', OpenApiTypes.INT, description='Filter by academic level', required=False),
+            OpenApiParameter('group_letter', OpenApiTypes.STR, description='Buscar por letra de grupo', required=False),
             OpenApiParameter('status', OpenApiTypes.BOOL, description='Filtrar por estado', required=False),
             OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
             OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
@@ -412,11 +411,14 @@ class GroupListCreateView(APIView):
         )
         id_generation = request.query_params.get('id_generation')
         academic_level = request.query_params.get('academic_level')
+        group_letter = request.query_params.get('group_letter')
         status_param = request.query_params.get('status')
         if id_generation:
             queryset = queryset.filter(id_generation_id=id_generation)
         if academic_level:
             queryset = queryset.filter(academic_level=academic_level)
+        if group_letter:
+            queryset = queryset.filter(group_letter__icontains=group_letter)
         if status_param is not None:
             queryset = queryset.filter(status=status_param.lower() in ('true', '1'))
         logger.info('Grupos consultados | count={}', queryset.count())
@@ -953,6 +955,7 @@ class SubjectListCreateView(APIView):
         tags=['Materias'],
         parameters=[
             OpenApiParameter('academic_level', OpenApiTypes.INT, description='Filter by academic level', required=False),
+            OpenApiParameter('name', OpenApiTypes.STR, description='Buscar por nombre de materia', required=False),
             OpenApiParameter('status', OpenApiTypes.BOOL, description='Filtrar por estado', required=False),
             OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
             OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
@@ -962,9 +965,12 @@ class SubjectListCreateView(APIView):
     def get(self, request):
         queryset = Subject.objects.prefetch_related('units').all()
         academic_level = request.query_params.get('academic_level')
+        name = request.query_params.get('name')
         status_param = request.query_params.get('status')
         if academic_level:
             queryset = queryset.filter(level_number=academic_level)
+        if name:
+            queryset = queryset.filter(name__icontains=name)
         if status_param is not None:
             queryset = queryset.filter(status=status_param.lower() in ('true', '1'))
         logger.info('Materias consultadas | count={}', queryset.count())
@@ -1123,6 +1129,7 @@ class TeacherSubjectsView(APIView):
     - Admin: returns all subjects in the system (full catalogue access).
     Ownership is enforced implicitly for teachers: the query always uses
     request.user.pk, so a teacher can never access another teacher's subjects.
+    Supports pagination and search by name.
     """
     permission_classes = [IsTeacherOrAdmin]
     throttle_classes = [_TeacherSubjectsThrottle]
@@ -1130,6 +1137,11 @@ class TeacherSubjectsView(APIView):
     @extend_schema(
         summary='Materias del docente autenticado (o todas, si es administrador)',
         tags=['Materias'],
+        parameters=[
+            OpenApiParameter('name', OpenApiTypes.STR, description='Buscar por nombre de materia', required=False),
+            OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
+            OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
+        ],
         responses={
             200: TeacherSubjectSerializer(many=True),
         },
@@ -1139,17 +1151,21 @@ class TeacherSubjectsView(APIView):
         if role is None and request.auth is not None:
             role = request.auth.get('role')
 
+        name_filter = request.query_params.get('name')
+
         if role == 'admin':
             subjects = (
                 Subject.objects.prefetch_related('units')
                 .order_by('level_number', 'name')
             )
-            serializer = TeacherSubjectSerializer(subjects, many=True)
+            if name_filter:
+                subjects = subjects.filter(name__icontains=name_filter)
+            
             logger.info(
                 'All subjects listed by admin | user={} count={}',
-                request.user.pk, len(serializer.data),
+                request.user.pk, subjects.count(),
             )
-            return success_response({'results': serializer.data})
+            return paginated_success_response(request, subjects, TeacherSubjectSerializer)
 
         # Teacher path — ownership implicitly enforced via user.pk
         try:
@@ -1165,9 +1181,11 @@ class TeacherSubjectsView(APIView):
             .prefetch_related('units')
             .order_by('level_number', 'name')
         )
-        serializer = TeacherSubjectSerializer(subjects, many=True)
+        if name_filter:
+            subjects = subjects.filter(name__icontains=name_filter)
+        
         logger.info(
             'Teacher subjects listed | user={} count={}',
-            request.user.pk, len(serializer.data),
+            request.user.pk, subjects.count(),
         )
-        return success_response({'results': serializer.data})
+        return paginated_success_response(request, subjects, TeacherSubjectSerializer)

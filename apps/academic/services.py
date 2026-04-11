@@ -22,17 +22,27 @@ class PeriodService:
     @staticmethod
     def get_current_period():
         """
-        Determine the current academic period by comparing today's date
-        against the registered start_date / end_date ranges.
+        Determine the current academic period by calculating which period
+        the current date falls into, then retrieving it from the database.
 
         Returns:
-            Period | None: The active period whose range contains today,
+            Period | None: The active period for the current date,
                            or None if no matching period is found.
         """
         today = timezone.now().date()
+        month = today.month
+
+        # Determine period name based on month
+        if month <= 4:
+            period_name = 'Enero-Abril'
+        elif month <= 8:
+            period_name = 'Mayo-Agosto'
+        else:
+            period_name = 'Septiembre-Diciembre'
+
+        # Fetch the period from database (periods are reusable, no year needed)
         return Period.objects.filter(
-            start_date__lte=today,
-            end_date__gte=today,
+            period_name=period_name,
             status=True,
         ).first()
 
