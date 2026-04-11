@@ -26,6 +26,7 @@ API REST para la gestión de exámenes y evaluaciones académicas construida con
 - 📝 Sistema de preguntas y respuestas
 - 📋 Creación y asignación de exámenes
 - 🎯 Seguimiento de calificaciones
+- ⚙️ Avance automático de niveles académicos (APScheduler)
 - 📖 Documentación interactiva con Swagger
 
 ---
@@ -37,6 +38,7 @@ API REST para la gestión de exámenes y evaluaciones académicas construida con
 - **Django REST Framework 3.16**
 - **PostgreSQL** (Base de datos)
 - **JWT** (Autenticación)
+- **APScheduler 3.10** (Tareas programadas automáticas)
 - **Swagger/OpenAPI** (Documentación)
 
 ---
@@ -234,7 +236,28 @@ Este script crea automáticamente los tres periodos para cada año, sin necesida
 
 ### Avance Automático de Niveles Académicos
 
-El sistema incrementa automáticamente el nivel académico (`academic_level`) de todos los grupos al inicio de cada periodo mediante un **management command programado**:
+El sistema incrementa automáticamente el nivel académico (`academic_level`) de todos los grupos al inicio de cada periodo mediante **APScheduler**, que ejecuta la tarea en segundo plano sin necesidad de configuración externa.
+
+#### ⚙️ Funcionamiento Automático
+
+**APScheduler** se inicia automáticamente cuando arrancas el servidor Django y programa la ejecución del avance de niveles para:
+- **1 de enero a las 00:00** (Periodo Enero-Abril)
+- **1 de mayo a las 00:00** (Periodo Mayo-Agosto)
+- **1 de septiembre a las 00:00** (Periodo Septiembre-Diciembre)
+
+No se requiere configuración adicional de cron o Task Scheduler. El sistema se encarga de todo automáticamente mientras el servidor esté en ejecución.
+
+#### 🔧 Configuración
+
+APScheduler está habilitado por defecto. Si necesitas deshabilitarlo, agrega en tu archivo `.env`:
+
+```env
+APSCHEDULER_ENABLED=False
+```
+
+#### 🛠️ Ejecución Manual
+
+Si necesitas ejecutar el avance de niveles manualmente por alguna razón de testing o recuperación:
 
 ```bash
 # Ejecutar manualmente (producción)
@@ -244,47 +267,30 @@ python manage.py advance_academic_levels
 python manage.py advance_academic_levels --dry-run
 ```
 
-#### Configurar Ejecución Automática
+#### 📋 Funcionamiento
 
-**En Linux (Cron):**
-
-Edita el crontab:
-```bash
-crontab -e
-```
-
-Agrega las siguientes líneas para ejecutar automáticamente a las 12:00 AM del 1 de enero, mayo y septiembre:
-```cron
-0 0 1 1 * /ruta/al/entorno/python /ruta/al/proyecto/manage.py advance_academic_levels
-0 0 1 5 * /ruta/al/entorno/python /ruta/al/proyecto/manage.py advance_academic_levels
-0 0 1 9 * /ruta/al/entorno/python /ruta/al/proyecto/manage.py advance_academic_levels
-```
-
-**En Windows (Task Scheduler):**
-
-1. Abre **Programador de tareas** (Task Scheduler)
-2. Crea tres tareas programadas:
-   - **Nombre**: `SEA_Advance_January`
-   - **Desencadenador**: 1 de enero a las 00:00, repetir cada año
-   - **Acción**: Ejecutar programa
-     - Programa: `C:\Python39\python.exe` (ruta a tu Python)
-     - Argumentos: `manage.py advance_academic_levels`
-     - Iniciar en: `C:\ruta\al\proyecto\SEA-api`
-   
-3. Repite para mayo (5/1) y septiembre (9/1)
-
-#### Funcionamiento
-
-El comando:
+El scheduler automático:
+- Se inicia cuando Django arranca (método `ready()` en `apps/academic/apps.py`)
 - Detecta el periodo actual basado en la fecha de ejecución
 - Calcula el nuevo nivel académico de cada grupo usando la fórmula:
   ```
   academic_level = ((año_actual - año_generación) * 3) + (índice_periodo_actual - índice_periodo_inicio) + 1
   ```
 - Actualiza el nivel de cada grupo, respetando el límite `total_levels` de su generación
-- Registra todos los cambios en los logs
+- Registra todos los cambios en los logs (`logs/info.log`)
 
-> **Nota**: El comando valida que se ejecute en el primer día de un periodo (1/ene, 1/may, 1/sep) y emite una advertencia si no es así.
+#### 📊 Monitoreo
+
+Los logs del scheduler se guardan en:
+- `logs/info.log` - Ejecuciones exitosas
+- `logs/error.log` - Errores durante la ejecución
+
+Puedes verificar la próxima ejecución programada en los logs al iniciar el servidor:
+```
+Academic level scheduler started | next_run=2026-05-01 00:00:00-06:00
+```
+
+> **Nota**: El servidor debe estar en ejecución para que el scheduler funcione. En producción, asegúrate de que el servidor Django esté corriendo como servicio persistente (usando systemd, supervisor, o similar).
 
 ---
 
