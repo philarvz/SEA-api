@@ -49,7 +49,7 @@ def generate_periods():
             skipped_count += 1
             print(f'- Skipped (already exists): {period_name}')
 
-    print(f'\n Summary:')
+    print('\n Summary:')
     print(f'  Created: {created_count} period(s)')
     print(f'  Skipped: {skipped_count} period(s) (already existed)')
     

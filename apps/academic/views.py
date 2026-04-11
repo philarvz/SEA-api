@@ -629,9 +629,9 @@ class GroupAssignmentsView(APIView):
     )
     def get(self, request, pk):
         try:
-            group = Group.objects.get(pk=pk)
+            Group.objects.get(pk=pk)
         except Group.DoesNotExist:
-            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
         assignments = (
             GroupTeacherAssignment.objects
@@ -666,7 +666,7 @@ class GroupAssignmentsView(APIView):
         try:
             group = Group.objects.select_related('id_generation').get(pk=pk)
         except Group.DoesNotExist:
-            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
         if not group.status:
             return error_response('No se puede asignar docentes a un grupo inactivo.', status_code=status.HTTP_400_BAD_REQUEST)
@@ -772,7 +772,7 @@ class GroupAvailableTeachersView(APIView):
         try:
             group = Group.objects.select_related('id_generation').get(pk=pk)
         except Group.DoesNotExist:
-            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+            return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
         subject_id = request.query_params.get('subject_id')
         if not subject_id:
@@ -835,7 +835,7 @@ class GroupStudentsView(APIView):
     )
     def get(self, request, pk):
         try:
-            group = Group.objects.get(pk=pk)
+            Group.objects.get(pk=pk)
         except Group.DoesNotExist:
             return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
