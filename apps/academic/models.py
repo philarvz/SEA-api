@@ -32,9 +32,13 @@ class Generation(BaseAuditModel):
 
 class Period(BaseAuditModel):
     """
-    Academic period: one of three annual terms (Enero-Abril, Mayo-Agosto,
-    Septiembre-Diciembre).  The current period is determined dynamically by
-    comparing today's date against start_date / end_date.
+    Academic period: one of three reusable terms (Enero-Abril, Mayo-Agosto,
+    Septiembre-Diciembre). Each period is created once and reused every year.
+    Dates are calculated automatically using the current year:
+    - Enero-Abril: Jan 1 - Apr 30
+    - Mayo-Agosto: May 1 - Aug 31
+    - Septiembre-Diciembre: Sep 1 - Dec 31
+    Academic level progression occurs automatically at 12:00 AM on the first day of each period.
     """
     PERIOD_CHOICES = [
         ('Enero-Abril', 'Enero-Abril'),
@@ -43,23 +47,49 @@ class Period(BaseAuditModel):
     ]
 
     id_period = models.AutoField(primary_key=True, db_column='id_period')
-    year = models.IntegerField()
     period_name = models.CharField(
-        max_length=50, choices=PERIOD_CHOICES, db_column='period_name'
+        max_length=50, choices=PERIOD_CHOICES, db_column='period_name', unique=True
     )
-    start_date = models.DateField(db_column='start_date')
-    end_date = models.DateField(db_column='end_date')
     status = models.BooleanField(default=True)
 
     class Meta:
         db_table = 'period'
         verbose_name = 'Period'
         verbose_name_plural = 'Periods'
-        ordering = ['-year', 'period_name']
-        unique_together = [['year', 'period_name']]
+        ordering = ['period_name']
 
     def __str__(self):
-        return f"{self.year} - {self.period_name}"
+        return f"{self.period_name}"
+
+    @property
+    def start_date(self):
+        """Calculate start date based on period_name and current year."""
+        from datetime import date
+        from django.utils import timezone
+        month_map = {
+            'Enero-Abril': 1,
+            'Mayo-Agosto': 5,
+            'Septiembre-Diciembre': 9,
+        }
+        month = month_map.get(self.period_name, 1)
+        current_year = timezone.now().date().year
+        return date(current_year, month, 1)
+
+    @property
+    def end_date(self):
+        """Calculate end date based on period_name and current year."""
+        from datetime import date
+        import calendar
+        from django.utils import timezone
+        end_month_map = {
+            'Enero-Abril': 4,
+            'Mayo-Agosto': 8,
+            'Septiembre-Diciembre': 12,
+        }
+        end_month = end_month_map.get(self.period_name, 4)
+        current_year = timezone.now().date().year
+        last_day = calendar.monthrange(current_year, end_month)[1]
+        return date(current_year, end_month, last_day)
 
 
 class Group(BaseAuditModel):

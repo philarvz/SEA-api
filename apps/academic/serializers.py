@@ -36,24 +36,13 @@ class GenerationSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class PeriodSerializer(serializers.ModelSerializer):
+    start_date = serializers.DateField(read_only=True)
+    end_date = serializers.DateField(read_only=True)
+
     class Meta:
         model = Period
-        fields = ['id_period', 'year', 'period_name', 'start_date', 'end_date', 'status']
-        read_only_fields = ['id_period']
-
-    def validate_year(self, value):
-        if value < 1900 or value > 2200:
-            raise serializers.ValidationError('El año del periodo no es válido.')
-        return value
-
-    def validate(self, attrs):
-        start = attrs.get('start_date', getattr(self.instance, 'start_date', None))
-        end = attrs.get('end_date', getattr(self.instance, 'end_date', None))
-        if start and end and start >= end:
-            raise serializers.ValidationError(
-                {'end_date': 'La fecha de fin debe ser posterior a la fecha de inicio.'}
-            )
-        return attrs
+        fields = ['id_period', 'period_name', 'start_date', 'end_date', 'status']
+        read_only_fields = ['id_period', 'start_date', 'end_date']
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +118,7 @@ class GroupSerializer(serializers.ModelSerializer):
     def get_period_info(self, obj):
         current_period = self._get_current_period()
         if current_period:
-            return f"{current_period.year} - {current_period.period_name}"
+            return current_period.period_name
         return None
 
     def get_id_period(self, obj):

@@ -363,3 +363,13 @@ LOGGING = {
         'level': 'DEBUG',
     },
 }
+
+
+# ------------------------------------------------------------------
+# APScheduler Configuration
+# ------------------------------------------------------------------
+# APScheduler is used to automatically advance academic levels on:
+# - January 1 at 00:00 (Periodo Enero-Abril)
+# - May 1 at 00:00 (Periodo Mayo-Agosto)
+# - September 1 at 00:00 (Periodo Septiembre-Diciembre)
+APSCHEDULER_ENABLED = config('APSCHEDULER_ENABLED', default=True, cast=bool)
