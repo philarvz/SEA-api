@@ -4,6 +4,7 @@ Covers: Generation, Period, Group, Subject and auxiliary operations.
 """
 
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from .models import Generation, Period, Group, Subject, Unit, GroupTeacherAssignment
 from .services import PeriodService
@@ -115,22 +116,27 @@ class GroupSerializer(serializers.ModelSerializer):
             self._cached_current_period = PeriodService.get_current_period()
         return self._cached_current_period
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_period_info(self, obj):
         current_period = self._get_current_period()
         if current_period:
             return current_period.period_name
         return None
 
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
     def get_id_period(self, obj):
         current_period = self._get_current_period()
         return current_period.pk if current_period else None
 
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
     def get_academic_level(self, obj):
         return PeriodService.sync_group_academic_level(obj)
 
+    @extend_schema_field(serializers.IntegerField())
     def get_students_count(self, obj):
         return getattr(obj, 'students_count', obj.students.count())
 
+    @extend_schema_field(serializers.ListField())
     def get_assignments(self, obj):
         try:
             assignments = obj.teacher_assignments.select_related(
@@ -192,7 +198,7 @@ class TeacherSubjectSerializer(serializers.ModelSerializer):
 # Shared / auxiliary
 # ---------------------------------------------------------------------------
 
-class StatusUpdateSerializer(serializers.Serializer):
+class GroupStatusUpdateSerializer(serializers.Serializer):
     """Generic serializer for logical activation / deactivation."""
     status = serializers.BooleanField(required=True)
 

@@ -25,7 +25,7 @@ from .serializers import (
     GroupUpdateSerializer,
     SubjectSerializer,
     UnitSerializer,
-    StatusUpdateSerializer,
+    GroupStatusUpdateSerializer,
     AssignStudentSerializer,
     CreateGroupTeacherAssignmentSerializer,
     AvailableTeacherSerializer,
@@ -179,7 +179,7 @@ class GenerationStatusView(APIView):
     @extend_schema(
         summary='Cambiar estado de generación',
         tags=['Generaciones'],
-        request=StatusUpdateSerializer,
+        request=GroupStatusUpdateSerializer,
         responses={200: OpenApiResponse(description='Estado actualizado'), 404: OpenApiResponse(description='No encontrada')},
     )
     def patch(self, request, pk):
@@ -187,7 +187,7 @@ class GenerationStatusView(APIView):
             generation = Generation.objects.get(pk=pk)
         except Generation.DoesNotExist:
             return error_response(MSG_GENERATION_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
-        serializer = StatusUpdateSerializer(data=request.data)
+        serializer = GroupStatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             return error_response(MSG_INVALID_DATA, serializer.errors)
         generation.status = serializer.validated_data['status']
@@ -324,7 +324,7 @@ class PeriodStatusView(APIView):
     @extend_schema(
         summary='Cambiar estado de periodo académico',
         tags=['Periodos'],
-        request=StatusUpdateSerializer,
+        request=GroupStatusUpdateSerializer,
         responses={200: OpenApiResponse(description='Estado actualizado'), 404: OpenApiResponse(description='No encontrado')},
     )
     def patch(self, request, pk):
@@ -332,7 +332,7 @@ class PeriodStatusView(APIView):
             period = Period.objects.get(pk=pk)
         except Period.DoesNotExist:
             return error_response(MSG_PERIOD_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
-        serializer = StatusUpdateSerializer(data=request.data)
+        serializer = GroupStatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             return error_response(MSG_INVALID_DATA, serializer.errors)
         period.status = serializer.validated_data['status']
@@ -407,7 +407,7 @@ class GroupListCreateView(APIView):
             .select_related('id_generation')
             .prefetch_related('teacher_assignments__teacher__user', 'teacher_assignments__subject')
             .annotate(students_count=Count('students'))
-            .all()
+            .order_by('id_generation', 'group_letter')
         )
         id_generation = request.query_params.get('id_generation')
         academic_level = request.query_params.get('academic_level')
@@ -535,7 +535,7 @@ class GroupStatusView(APIView):
     @extend_schema(
         summary='Cambiar estado de grupo académico',
         tags=['Grupos'],
-        request=StatusUpdateSerializer,
+        request=GroupStatusUpdateSerializer,
         responses={200: OpenApiResponse(description='Estado actualizado'), 404: OpenApiResponse(description='No encontrado')},
     )
     def patch(self, request, pk):
@@ -543,7 +543,7 @@ class GroupStatusView(APIView):
             group = Group.objects.get(pk=pk)
         except Group.DoesNotExist:
             return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
-        serializer = StatusUpdateSerializer(data=request.data)
+        serializer = GroupStatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             return error_response(MSG_INVALID_DATA, serializer.errors)
         group.status = serializer.validated_data['status']
@@ -1092,7 +1092,7 @@ class SubjectStatusView(APIView):
     @extend_schema(
         summary='Cambiar estado de materia',
         tags=['Materias'],
-        request=StatusUpdateSerializer,
+        request=GroupStatusUpdateSerializer,
         responses={200: OpenApiResponse(description='Estado actualizado'), 404: OpenApiResponse(description='No encontrada')},
     )
     def patch(self, request, pk):
@@ -1100,7 +1100,7 @@ class SubjectStatusView(APIView):
             subject = Subject.objects.get(pk=pk)
         except Subject.DoesNotExist:
             return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
-        serializer = StatusUpdateSerializer(data=request.data)
+        serializer = GroupStatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             return error_response(MSG_INVALID_DATA, serializer.errors)
         subject.status = serializer.validated_data['status']

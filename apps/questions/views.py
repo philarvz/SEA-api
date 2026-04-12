@@ -12,7 +12,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from drf_spectacular.types import OpenApiTypes
 
 from apps.academic.permissions import IsTeacherOrAdmin
@@ -89,6 +89,15 @@ def _paginated_payload(request, queryset, serializer_class):
     }
 
 
+_PATH_ID = OpenApiParameter('id', OpenApiTypes.INT, OpenApiParameter.PATH, description='ID de la pregunta')
+
+
+@extend_schema_view(
+    retrieve=extend_schema(parameters=[_PATH_ID]),
+    update=extend_schema(parameters=[_PATH_ID]),
+    partial_update=extend_schema(parameters=[_PATH_ID]),
+    destroy=extend_schema(parameters=[_PATH_ID]),
+)
 class QuestionViewSet(ModelViewSet):
     """
     /questions/ CRUD + upload, template.

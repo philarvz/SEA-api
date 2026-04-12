@@ -3,6 +3,7 @@ Serializers for the Question bank (CRUD, nested answers, code questions).
 """
 
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from .models import Question, Answer, CodeQuestion
 
@@ -57,6 +58,14 @@ class CodeQuestionPayloadSerializer(serializers.Serializer):
         return value if value is not None else []
 
 
+@extend_schema_field({
+    'type': 'object',
+    'nullable': True,
+    'properties': {
+        'language': {'type': 'string', 'example': 'python'},
+        'test_cases': {'type': 'array', 'items': {'type': 'string'}},
+    },
+})
 class CodeQuestionField(serializers.Field):
     """Read/write helper: avoids OneToOne DoesNotExist issues on serialization."""
 
