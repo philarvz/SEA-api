@@ -407,7 +407,7 @@ class GroupListCreateView(APIView):
             .select_related('id_generation')
             .prefetch_related('teacher_assignments__teacher__user', 'teacher_assignments__subject')
             .annotate(students_count=Count('students'))
-            .all()
+            .order_by('id_generation', 'group_letter')
         )
         id_generation = request.query_params.get('id_generation')
         academic_level = request.query_params.get('academic_level')
