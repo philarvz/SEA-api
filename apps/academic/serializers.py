@@ -260,3 +260,44 @@ class AvailableTeacherSerializer(serializers.Serializer):
     full_name = serializers.CharField()
     email = serializers.EmailField()
     subjects_at_level = serializers.ListField(child=serializers.CharField())
+
+
+# ---------------------------------------------------------------------------
+# Assignable groups (for exam assignment dialog selector)
+# ---------------------------------------------------------------------------
+
+class AssignableGroupSerializer(serializers.ModelSerializer):
+    """
+    Lightweight read-only serializer for groups available to be selected
+    in the exam assignment dialog. Returns only display and identity fields;
+    no assignment details or student lists are included.
+    """
+    generation_year = serializers.IntegerField(source='id_generation.year', read_only=True)
+    generation_total_levels = serializers.IntegerField(source='id_generation.total_levels', read_only=True)
+    id_period = serializers.SerializerMethodField()
+    period_info = serializers.SerializerMethodField()
+    academic_level = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Group
+        fields = [
+            'id_group', 'id_generation', 'generation_year',
+            'generation_total_levels', 'id_period', 'period_info',
+            'group_letter', 'academic_level', 'status',
+        ]
+
+    def _get_current_period(self):
+        if not hasattr(self, '_cached_current_period'):
+            self._cached_current_period = PeriodService.get_current_period()
+        return self._cached_current_period
+
+    def get_id_period(self, obj):
+        current_period = self._get_current_period()
+        return current_period.pk if current_period else None
+
+    def get_period_info(self, obj):
+        current_period = self._get_current_period()
+        return current_period.period_name if current_period else None
+
+    def get_academic_level(self, obj):
+        return PeriodService.sync_group_academic_level(obj)

@@ -30,6 +30,7 @@ from .serializers import (
     CreateGroupTeacherAssignmentSerializer,
     AvailableTeacherSerializer,
     TeacherSubjectSerializer,
+    AssignableGroupSerializer,
 )
 from .permissions import IsTeacherOrAdmin
 from .services import PeriodService
@@ -890,57 +891,77 @@ class GroupStudentsView(APIView):
         return success_response(payload)
 
 
+class _TeacherMyGroupsThrottle(UserRateThrottle):
+    """Dedicated throttle scope for teacher/admin group-selector listing."""
+    scope = 'teacher_my_groups'
+
+
 class TeacherMyGroupsView(APIView):
     """
-    GET /api/academic/groups/my-groups/?subject_id=X
-    Returns groups where the authenticated teacher is assigned to teach.
-    subject_id is optional — filters to groups assigned for that specific subject.
+    GET /api/academic/groups/my-groups/
+    Returns the groups accessible to the authenticated user without pagination,
+    intended for use in dropdown / selector widgets:
+    - Teacher: returns only groups where the teacher has a GroupTeacherAssignment.
+    - Admin: returns all active groups.
+    Ownership is enforced for teachers: the query filters through the
+    authenticated user's TeacherProfile, so a teacher can never see groups
+    outside their own assignments.
     """
     permission_classes = [IsTeacherOrAdmin]
+    throttle_classes = [_TeacherMyGroupsThrottle]
 
     @extend_schema(
-        summary='Grupos donde el docente imparte clases',
+        summary='Grupos accesibles para asignación de examen',
         tags=['Grupos'],
-        parameters=[
-            OpenApiParameter('subject_id', OpenApiTypes.INT, description='Filtrar por materia', required=False),
-            OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
-            OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
-        ],
-        responses={200: OpenApiResponse(description='Lista de grupos del docente')},
+        responses={200: AssignableGroupSerializer(many=True)},
     )
     def get(self, request):
+        role = getattr(request.user, 'role', None)
+        if role is None and request.auth is not None:
+            role = request.auth.get('role')
+
+        if role == 'admin':
+            queryset = (
+                Group.objects
+                .select_related('id_generation')
+                .filter(status=True)
+                .order_by('academic_level', 'group_letter')
+            )
+            serializer = AssignableGroupSerializer(queryset, many=True)
+            logger.info(
+                'All groups listed for exam assignment selector | user={} count={}',
+                request.user.pk, len(serializer.data),
+            )
+            return success_response(serializer.data)
+
+        # Teacher path — ownership implicitly enforced via user.pk
         try:
-            profile = TeacherProfile.objects.get(user_id=request.user.id)
+            profile = TeacherProfile.objects.get(user_id=request.user.pk)
         except TeacherProfile.DoesNotExist:
-            return success_response({'results': [], 'pagination': {'count': 0, 'page': 1, 'page_size': 10, 'total_pages': 1}})
+            logger.info(
+                'Teacher my-groups requested but no profile found | user={}',
+                request.user.pk,
+            )
+            return success_response([])
 
-        subject_id = request.query_params.get('subject_id')
-
-        assignments_qs = (
+        group_ids = (
             GroupTeacherAssignment.objects
             .filter(teacher=profile)
-            .select_related('group__id_generation', 'subject')
-            .annotate(_student_count=Count('group__students'))
+            .values_list('group_id', flat=True)
+            .distinct()
         )
-        if subject_id:
-            assignments_qs = assignments_qs.filter(subject_id=subject_id)
-
-        results = []
-        for a in assignments_qs:
-            g = a.group
-            results.append({
-                'id_group': g.pk,
-                'group_letter': g.group_letter,
-                'academic_level': g.academic_level,
-                'generation_year': g.id_generation.year,
-                'id_generation': g.id_generation.pk,
-                'students_count': a._student_count,
-                'subject': {'id_subject': a.subject.pk, 'name': a.subject.name},
-                'status': g.status,
-            })
-
-        logger.info('Mis grupos | user={} subject_id={} count={}', request.user.pk, subject_id, len(results))
-        return success_response({'results': results})
+        queryset = (
+            Group.objects
+            .select_related('id_generation')
+            .filter(pk__in=group_ids, status=True)
+            .order_by('academic_level', 'group_letter')
+        )
+        serializer = AssignableGroupSerializer(queryset, many=True)
+        logger.info(
+            'Teacher my-groups listed for exam assignment selector | user={} count={}',
+            request.user.pk, len(serializer.data),
+        )
+        return success_response(serializer.data)
 
 
 # ---------------------------------------------------------------------------

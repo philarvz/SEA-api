@@ -171,6 +171,7 @@ REST_FRAMEWORK = {
         'student_assignments': config('THROTTLE_STUDENT_RATE', default=_THROTTLE_RATE_STANDARD),
         'created_by_me': config('THROTTLE_CREATED_BY_ME_RATE', default=_THROTTLE_RATE_STANDARD),
         'teacher_subjects': config('THROTTLE_TEACHER_SUBJECTS_RATE', default=_THROTTLE_RATE_STANDARD),
+        'teacher_my_groups': config('THROTTLE_TEACHER_MY_GROUPS_RATE', default=_THROTTLE_RATE_STANDARD),
     },
 }
 
