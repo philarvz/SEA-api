@@ -1,10 +1,20 @@
+"""
+Grading service for the answers module.
+
+CODE-type questions are evaluated asynchronously via a Celery task that runs
+student code inside an isolated Docker container.  No ``exec()`` or ``eval()``
+of student code happens in the Django / Celery worker process.
+"""
+
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
+from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
+from loguru import logger
 
 from apps.exams.models import ExamQuestion
 from apps.questions.models import CodeQuestion
@@ -12,31 +22,16 @@ from apps.questions.models import CodeQuestion
 from ..models import StudentAnswer
 
 
+# Timeout (seconds) to wait for the Celery sandbox task to finish.
+_CELERY_RESULT_TIMEOUT = int(getattr(settings, 'SANDBOX_TIMEOUT_SECONDS', 10)) + 15
+
+
 class GradingService:
     SCORE_SCALE = Decimal('10.00')
-    _SAFE_BUILTINS = {
-        'abs': abs,
-        'all': all,
-        'any': any,
-        'bool': bool,
-        'dict': dict,
-        'enumerate': enumerate,
-        'float': float,
-        'int': int,
-        'len': len,
-        'list': list,
-        'max': max,
-        'min': min,
-        'pow': pow,
-        'print': print,
-        'range': range,
-        'round': round,
-        'set': set,
-        'str': str,
-        'sum': sum,
-        'tuple': tuple,
-        'zip': zip,
-    }
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     @staticmethod
     def grade_student_answer(student_answer: StudentAnswer) -> dict[str, Any]:
@@ -88,34 +83,7 @@ class GradingService:
             }
 
         if question_type == 'CODE':
-            code_question = CodeQuestion.objects.filter(question=question).first()
-            if not code_question:
-                student_answer.is_correct = False
-                student_answer.score = Decimal('0.00')
-                student_answer.evaluated_at = timezone.now()
-                student_answer.save(update_fields=['is_correct', 'score', 'evaluated_at', 'modified_at'])
-                return {
-                    'graded': True,
-                    'is_correct': False,
-                    'score': Decimal('0.00'),
-                    'feedback': ['La pregunta de codigo no tiene casos de prueba configurados.'],
-                }
-
-            passed, feedback = GradingService._run_code_test_cases(
-                student_answer.code_answer or '',
-                code_question.test_cases,
-            )
-            score = Decimal(question.points if passed else 0)
-            student_answer.is_correct = passed
-            student_answer.score = score
-            student_answer.evaluated_at = timezone.now()
-            student_answer.save(update_fields=['is_correct', 'score', 'evaluated_at', 'modified_at'])
-            return {
-                'graded': True,
-                'is_correct': passed,
-                'score': score,
-                'feedback': feedback,
-            }
+            return GradingService._grade_code_answer(student_answer, question)
 
         return {
             'graded': False,
@@ -162,78 +130,81 @@ class GradingService:
             'status': exam_assignment.status,
         }
 
+    # ------------------------------------------------------------------
+    # CODE grading — delegates to the Docker-based Celery sandbox
+    # ------------------------------------------------------------------
+
     @staticmethod
-    def _execute_user_code(code_answer: str, namespace: dict) -> str | None:
-        """Executes user code in the sandbox namespace. Returns an error message or None."""
+    def _grade_code_answer(student_answer: StudentAnswer, question) -> dict[str, Any]:
+        """Grade a CODE answer by dispatching a Celery task that runs the
+        student code inside an isolated Docker container.
+
+        The previous implementation used ``exec()`` directly in the Django
+        process, which is a critical security vulnerability (CWE-94).  This
+        version never executes untrusted code in-process.
+        """
+        code_question = CodeQuestion.objects.filter(question=question).first()
+        if not code_question:
+            student_answer.is_correct = False
+            student_answer.score = Decimal('0.00')
+            student_answer.evaluated_at = timezone.now()
+            student_answer.save(update_fields=['is_correct', 'score', 'evaluated_at', 'modified_at'])
+            return {
+                'graded': True,
+                'is_correct': False,
+                'score': Decimal('0.00'),
+                'feedback': ['La pregunta de codigo no tiene casos de prueba configurados.'],
+            }
+
+        # Import here to avoid circular imports at module level.
+        from apps.answers.tasks import run_code_in_sandbox
+
+        code = student_answer.code_answer or ''
+        test_cases = code_question.test_cases or []
+
+        # Dispatch to sandboxed Docker container via Celery and wait for the result.
         try:
-            exec(code_answer, namespace, namespace)
-            return None
+            async_result = run_code_in_sandbox.delay(code, test_cases)
+            sandbox_result = async_result.get(timeout=_CELERY_RESULT_TIMEOUT)
         except Exception as exc:
-            return f'Error de ejecucion del codigo: {exc}'
+            logger.error(
+                'Sandbox task failed | answer={} error={}',
+                student_answer.pk,
+                exc,
+            )
+            # Mark as not graded so it can be retried or manually reviewed.
+            return {
+                'graded': False,
+                'is_correct': None,
+                'score': None,
+                'feedback': ['Error interno al evaluar el codigo. Intente nuevamente.'],
+            }
 
-    @staticmethod
-    def _is_function_test_case(test_case: dict) -> bool:
-        return 'function_name' in test_case and 'input' in test_case and 'expected_output' in test_case
+        # Translate the sandbox result into feedback compatible with existing API.
+        passed = sandbox_result.get('passed', False)
+        sandbox_error = sandbox_result.get('error')
+        raw_results = sandbox_result.get('results', [])
 
-    @staticmethod
-    def _call_function_test(test_case: dict, namespace: dict) -> None:
-        """Invokes a named function from namespace and asserts the expected output."""
-        fn = namespace.get(test_case['function_name'])
-        if not callable(fn):
-            raise AssertionError('La funcion objetivo no existe o no es invocable.')
-        raw_input = test_case['input']
-        if isinstance(raw_input, list):
-            result = fn(*raw_input)
-        elif isinstance(raw_input, dict):
-            result = fn(**raw_input)
-        else:
-            result = fn(raw_input)
-        if result != test_case['expected_output']:
-            raise AssertionError(f"Esperado {test_case['expected_output']}, obtenido {result}")
-
-    @staticmethod
-    def _run_dict_test_case(test_case: dict, namespace: dict) -> None:
-        """Handles a dict-style test case. Raises AssertionError on failure."""
-        if 'assertion' in test_case:
-            exec(test_case['assertion'], namespace, namespace)
-        elif 'expression' in test_case and 'expected_output' in test_case:
-            result = eval(test_case['expression'], namespace, namespace)
-            if result != test_case['expected_output']:
-                raise AssertionError(f"Esperado {test_case['expected_output']}, obtenido {result}")
-        elif GradingService._is_function_test_case(test_case):
-            GradingService._call_function_test(test_case, namespace)
-        else:
-            raise AssertionError('Formato de caso de prueba no soportado.')
-
-    @staticmethod
-    def _run_single_test(test_case: Any, namespace: dict) -> None:
-        """Dispatches a single test case by type. Raises AssertionError or Exception on failure."""
-        if isinstance(test_case, str):
-            exec(test_case, namespace, namespace)
-        elif isinstance(test_case, dict):
-            GradingService._run_dict_test_case(test_case, namespace)
-        else:
-            raise AssertionError('Formato de caso de prueba no soportado.')
-
-    @staticmethod
-    def _run_code_test_cases(code_answer: str, test_cases: list[Any]) -> tuple[bool, list[dict[str, Any]]]:
-        namespace: dict = {'__builtins__': GradingService._SAFE_BUILTINS}
         feedback: list[dict[str, Any]] = []
+        if sandbox_error:
+            feedback.append({'test_case': 0, 'status': 'error', 'error': sandbox_error})
 
-        error = GradingService._execute_user_code(code_answer, namespace)
-        if error:
-            return False, [{'test_case': 0, 'error': error}]
+        for idx, tc_result in enumerate(raw_results, start=1):
+            if tc_result.get('passed'):
+                feedback.append({'test_case': idx, 'status': 'passed'})
+            else:
+                err = tc_result.get('error', f"Esperado {tc_result.get('expected')}, obtenido {tc_result.get('output')}")
+                feedback.append({'test_case': idx, 'status': 'failed', 'error': err})
 
-        all_passed = True
-        for index, test_case in enumerate(test_cases, start=1):
-            try:
-                GradingService._run_single_test(test_case, namespace)
-                feedback.append({'test_case': index, 'status': 'passed'})
-            except AssertionError as exc:
-                all_passed = False
-                feedback.append({'test_case': index, 'status': 'failed', 'error': str(exc)})
-            except Exception as exc:
-                all_passed = False
-                feedback.append({'test_case': index, 'status': 'error', 'error': str(exc)})
+        score = Decimal(question.points if passed else 0)
+        student_answer.is_correct = passed
+        student_answer.score = score
+        student_answer.evaluated_at = timezone.now()
+        student_answer.save(update_fields=['is_correct', 'score', 'evaluated_at', 'modified_at'])
 
-        return all_passed, feedback
+        return {
+            'graded': True,
+            'is_correct': passed,
+            'score': score,
+            'feedback': feedback,
+        }

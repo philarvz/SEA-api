@@ -1,4 +1,7 @@
 services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — persistent relational database
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:14-alpine
     container_name: sea_postgres
@@ -17,6 +20,68 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis — message broker for Celery (NOT exposed externally)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: sea_redis
+    restart: always
+    # No "ports" section → Redis is only reachable by other compose services.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Celery worker — picks up tasks and runs student code in Docker sandboxes
+  # ---------------------------------------------------------------------------
+  # The worker needs access to the Docker daemon so it can spawn sandbox
+  # containers via ``docker run``.  We mount the host Docker socket for this.
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: sea_worker
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - USE_DATABASE=True
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=SEA_database
+      - DB_USER=postgres
+      - DB_PASSWORD=root
+    env_file:
+      - .env
+    volumes:
+      # Mount Docker socket so the worker can create sandbox containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # No "ports" — the worker is not an HTTP server.
+
+  # ---------------------------------------------------------------------------
+  # Sandbox image — built once, used by the worker at run-time
+  # ---------------------------------------------------------------------------
+  sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    image: sea-sandbox:latest
+    # This service exists only to build the image; it never runs as a
+    # long-lived container.  ``profiles: [build]`` prevents ``docker compose up``
+    # from starting it.
+    profiles:
+      - build
 
 volumes:
   postgres_data:

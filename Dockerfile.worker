@@ -1,0 +1,25 @@
+# -----------------------------------------------------------
+# Dockerfile for the Celery worker
+# -----------------------------------------------------------
+# Runs the Celery worker process that picks up grading tasks
+# and spawns sandbox containers via the mounted Docker socket.
+# -----------------------------------------------------------
+FROM python:3.11-slim
+
+# Install Docker CLI so the worker can call ``docker run``.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r celery && useradd -r -g celery -G docker -d /app -s /sbin/nologin celery
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+USER celery
+
+CMD ["celery", "-A", "config.celery", "worker", "--loglevel=info", "--concurrency=2"]
