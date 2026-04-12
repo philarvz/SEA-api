@@ -22,6 +22,7 @@ from .serializers import (
     QuestionSerializer,
     QuestionListSerializer,
 )
+from .subject_access import allowed_subject_ids_for_question_user
 from .excel_upload import (
     normalize_header_row,
     build_column_maps,
@@ -114,6 +115,9 @@ class QuestionViewSet(ModelViewSet):
             .prefetch_related('answers')
             .order_by('-id_question')
         )
+        allowed = allowed_subject_ids_for_question_user(self.request.user)
+        if allowed is not None:
+            qs = qs.filter(id_subject_id__in=allowed)
         qtype = self.request.query_params.get('type')
         diff = self.request.query_params.get('difficulty')
         subject = self.request.query_params.get('id_subject')
@@ -141,7 +145,7 @@ class QuestionViewSet(ModelViewSet):
         return success_response(ser.data)
 
     def create(self, request, *args, **kwargs):
-        ser = QuestionSerializer(data=request.data)
+        ser = QuestionSerializer(data=request.data, context={'request': request})
         ser.is_valid(raise_exception=True)
         instance = ser.save()
         logger.info('Question created | user={} id={}', request.user.pk, instance.pk)
@@ -151,7 +155,7 @@ class QuestionViewSet(ModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
-        ser = QuestionSerializer(instance, data=request.data, partial=partial)
+        ser = QuestionSerializer(instance, data=request.data, partial=partial, context={'request': request})
         ser.is_valid(raise_exception=True)
         instance = ser.save()
         logger.info('Question updated | user={} id={}', request.user.pk, instance.pk)

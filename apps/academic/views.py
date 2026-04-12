@@ -1139,6 +1139,7 @@ class TeacherSubjectsView(APIView):
         tags=['Materias'],
         parameters=[
             OpenApiParameter('name', OpenApiTypes.STR, description='Buscar por nombre de materia', required=False),
+            OpenApiParameter('status', OpenApiTypes.BOOL, description='Filtrar por estado activo', required=False),
             OpenApiParameter('page', OpenApiTypes.INT, description='Número de página', required=False),
             OpenApiParameter('page_size', OpenApiTypes.INT, description='Elementos por página', required=False),
         ],
@@ -1152,6 +1153,13 @@ class TeacherSubjectsView(APIView):
             role = request.auth.get('role')
 
         name_filter = request.query_params.get('name')
+        status_param = request.query_params.get('status')
+
+        def _apply_status_filter(qs):
+            if status_param is None:
+                return qs
+            active = str(status_param).lower() in ('true', '1')
+            return qs.filter(status=active)
 
         if role == 'admin':
             subjects = (
@@ -1160,7 +1168,8 @@ class TeacherSubjectsView(APIView):
             )
             if name_filter:
                 subjects = subjects.filter(name__icontains=name_filter)
-            
+            subjects = _apply_status_filter(subjects)
+
             logger.info(
                 'All subjects listed by admin | user={} count={}',
                 request.user.pk, subjects.count(),
@@ -1183,7 +1192,8 @@ class TeacherSubjectsView(APIView):
         )
         if name_filter:
             subjects = subjects.filter(name__icontains=name_filter)
-        
+        subjects = _apply_status_filter(subjects)
+
         logger.info(
             'Teacher subjects listed | user={} count={}',
             request.user.pk, subjects.count(),

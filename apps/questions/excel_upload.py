@@ -12,9 +12,9 @@ from typing import Any
 from django.contrib.auth.base_user import AbstractBaseUser
 
 from apps.academic.models import Subject
-from apps.users.models import TeacherProfile
 
 from .models import Question
+from .subject_access import allowed_subject_ids_for_question_user
 
 _VALID_BLOOM = frozenset({
     'remember',
@@ -246,30 +246,12 @@ def collect_options_from_row(
     return opts
 
 
-def _allowed_subject_ids_for_user(user: AbstractBaseUser | None) -> frozenset[int] | None:
-    """
-    None = sin restricción (admin u otro rol).
-    frozenset vacío = docente sin materias asignadas.
-    frozenset con ids = solo esas materias.
-    """
-    if user is None:
-        return None
-    role = getattr(user, 'role', None)
-    if role != 'teacher':
-        return None
-    try:
-        profile = TeacherProfile.objects.get(user_id=user.pk)
-    except TeacherProfile.DoesNotExist:
-        return frozenset()
-    return frozenset(profile.subjects.values_list('id_subject', flat=True))
-
-
 def resolve_subject_id(
     row: tuple[Any, ...] | list[Any],
     col_by_canon: dict[str, int],
     user: AbstractBaseUser | None = None,
 ) -> int:
-    allowed = _allowed_subject_ids_for_user(user)
+    allowed = allowed_subject_ids_for_question_user(user)
 
     if 'subject_id' in col_by_canon:
         raw = get_cell(row, col_by_canon['subject_id'])
