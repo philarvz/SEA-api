@@ -29,7 +29,7 @@ The container itself enforces:
   - --memory 128m   (OOM-kill on abuse)
   - --cpus 0.5      (throttled CPU)
   - --read-only      (immutable root FS)
-  - timeout enforced by the Celery task via subprocess
+  - timeout enforced by the caller via subprocess
 
 Even so, we restrict __builtins__ to a safe subset so that
 `import os` / `open()` / `eval()` etc. are not available to students.
@@ -111,8 +111,25 @@ def _call_function(fn, raw_input):
     return fn(raw_input)
 
 
-def _run_test_case(test_case: dict, namespace: dict) -> dict:
-    """Run a single test case and return a result dict."""
+def _run_test_case(test_case, namespace: dict) -> dict:
+    """Run a single test case and return a result dict.
+
+    Supports two formats:
+      • **dict** — ``{"function_name": "f", "input": [...], "expected_output": ...}``
+      • **str**  — raw assertion, e.g. ``'assert f(2, 3) == 5'``
+    """
+    # --- String-style assertion (e.g. stored as 'assert func(...) == value') ---
+    if isinstance(test_case, str):
+        try:
+            compiled = compile(test_case, '<test_case>', 'exec')
+            exec(compiled, namespace)  # noqa: S102 — sandboxed by Docker
+            return {'input': test_case, 'expected': 'pass', 'output': 'pass', 'passed': True}
+        except AssertionError:
+            return {'input': test_case, 'expected': 'pass', 'output': 'fail', 'passed': False, 'error': 'Assertion failed'}
+        except Exception:
+            return {'input': test_case, 'expected': 'pass', 'output': None, 'passed': False, 'error': traceback.format_exc()}
+
+    # --- Dict-style test case (function_name + input + expected_output) ---
     fn_name = test_case.get('function_name', '')
     raw_input = test_case.get('input')
     expected = test_case.get('expected_output')
@@ -150,7 +167,7 @@ def _run_test_case(test_case: dict, namespace: dict) -> dict:
 def main() -> None:
     try:
         payload = json.loads(sys.stdin.read())
-    except (json.JSONDecodeError, Exception) as exc:
+    except json.JSONDecodeError as exc:
         json.dump({'passed': False, 'results': [], 'error': f'JSON invalido: {exc}'}, sys.stdout)
         return
 

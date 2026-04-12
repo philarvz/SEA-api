@@ -1,9 +1,9 @@
 """
 Grading service for the answers module.
 
-CODE-type questions are evaluated asynchronously via a Celery task that runs
-student code inside an isolated Docker container.  No ``exec()`` or ``eval()``
-of student code happens in the Django / Celery worker process.
+CODE-type questions are evaluated synchronously via a Docker sandbox
+container.  No ``exec()`` or ``eval()`` of student code happens in
+the Django process.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
-from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
 from loguru import logger
@@ -20,10 +19,7 @@ from apps.exams.models import ExamQuestion
 from apps.questions.models import CodeQuestion
 
 from ..models import StudentAnswer
-
-
-# Timeout (seconds) to wait for the Celery sandbox task to finish.
-_CELERY_RESULT_TIMEOUT = int(getattr(settings, 'SANDBOX_TIMEOUT_SECONDS', 10)) + 15
+from .code_execution_service import run_code_in_sandbox
 
 
 class GradingService:
@@ -131,17 +127,16 @@ class GradingService:
         }
 
     # ------------------------------------------------------------------
-    # CODE grading — delegates to the Docker-based Celery sandbox
+    # CODE grading — synchronous Docker sandbox execution
     # ------------------------------------------------------------------
 
     @staticmethod
     def _grade_code_answer(student_answer: StudentAnswer, question) -> dict[str, Any]:
-        """Grade a CODE answer by dispatching a Celery task that runs the
-        student code inside an isolated Docker container.
+        """Grade a CODE answer by running student code inside an isolated
+        Docker container via ``subprocess.run``.
 
-        The previous implementation used ``exec()`` directly in the Django
-        process, which is a critical security vulnerability (CWE-94).  This
-        version never executes untrusted code in-process.
+        The call is synchronous — no Celery broker or worker needed.
+        Student code is NEVER executed in-process (no ``exec``/``eval``).
         """
         code_question = CodeQuestion.objects.filter(question=question).first()
         if not code_question:
@@ -156,31 +151,13 @@ class GradingService:
                 'feedback': ['La pregunta de codigo no tiene casos de prueba configurados.'],
             }
 
-        # Import here to avoid circular imports at module level.
-        from apps.answers.tasks import run_code_in_sandbox
-
         code = student_answer.code_answer or ''
         test_cases = code_question.test_cases or []
 
-        # Dispatch to sandboxed Docker container via Celery and wait for the result.
-        try:
-            async_result = run_code_in_sandbox.delay(code, test_cases)
-            sandbox_result = async_result.get(timeout=_CELERY_RESULT_TIMEOUT)
-        except Exception as exc:
-            logger.error(
-                'Sandbox task failed | answer={} error={}',
-                student_answer.pk,
-                exc,
-            )
-            # Mark as not graded so it can be retried or manually reviewed.
-            return {
-                'graded': False,
-                'is_correct': None,
-                'score': None,
-                'feedback': ['Error interno al evaluar el codigo. Intente nuevamente.'],
-            }
+        # Execute inside Docker sandbox (synchronous, blocks until done).
+        sandbox_result = run_code_in_sandbox(code, test_cases)
 
-        # Translate the sandbox result into feedback compatible with existing API.
+        # Translate the sandbox result into feedback compatible with the API.
         passed = sandbox_result.get('passed', False)
         sandbox_error = sandbox_result.get('error')
         raw_results = sandbox_result.get('results', [])

@@ -22,55 +22,7 @@ services:
       retries: 5
 
   # ---------------------------------------------------------------------------
-  # Redis — message broker for Celery (NOT exposed externally)
-  # ---------------------------------------------------------------------------
-  redis:
-    image: redis:7-alpine
-    container_name: sea_redis
-    restart: always
-    # No "ports" section → Redis is only reachable by other compose services.
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  # ---------------------------------------------------------------------------
-  # Celery worker — picks up tasks and runs student code in Docker sandboxes
-  # ---------------------------------------------------------------------------
-  # The worker needs access to the Docker daemon so it can spawn sandbox
-  # containers via ``docker run``.  We mount the host Docker socket for this.
-  # ---------------------------------------------------------------------------
-  worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.worker
-    container_name: sea_worker
-    restart: always
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - USE_DATABASE=True
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=SEA_database
-      - DB_USER=postgres
-      - DB_PASSWORD=root
-    env_file:
-      - .env
-    volumes:
-      # Mount Docker socket so the worker can create sandbox containers.
-      - /var/run/docker.sock:/var/run/docker.sock
-    # No "ports" — the worker is not an HTTP server.
-
-  # ---------------------------------------------------------------------------
-  # Sandbox image — built once, used by the worker at run-time
+  # Sandbox image — built once, used by Django at run-time via subprocess
   # ---------------------------------------------------------------------------
   sandbox:
     build:

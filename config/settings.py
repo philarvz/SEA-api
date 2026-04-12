@@ -241,23 +241,10 @@ MOCK_PASSWORD = config('MOCK_PASSWORD', default='1234')
 
 
 # ------------------------------------------------------------------
-# Celery Configuration (Redis broker, JSON serialization)
-# ------------------------------------------------------------------
-CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
-CELERY_TASK_TRACK_STARTED = True
-# Hard kill for any task that exceeds 60 s (safety net).
-CELERY_TASK_TIME_LIMIT = 60
-
-# ------------------------------------------------------------------
-# Docker Sandbox Configuration
+# Docker Sandbox Configuration — used for CODE question execution
 # ------------------------------------------------------------------
 SANDBOX_DOCKER_IMAGE = config('SANDBOX_DOCKER_IMAGE', default='sea-sandbox:latest')
-SANDBOX_TIMEOUT_SECONDS = config('SANDBOX_TIMEOUT_SECONDS', default=10, cast=int)
+SANDBOX_TIMEOUT_SECONDS = config('SANDBOX_TIMEOUT_SECONDS', default=5, cast=int)
 SANDBOX_MEMORY_LIMIT = config('SANDBOX_MEMORY_LIMIT', default='128m')
 SANDBOX_CPU_LIMIT = config('SANDBOX_CPU_LIMIT', default='0.5')
 SANDBOX_PIDS_LIMIT = config('SANDBOX_PIDS_LIMIT', default='64')
