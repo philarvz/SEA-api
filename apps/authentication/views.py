@@ -11,7 +11,13 @@ from rest_framework.exceptions import AuthenticationFailed
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from loguru import logger
 
-from .serializers import LoginSerializer, TokenResponseSerializer, ChangePasswordSerializer
+from .serializers import (
+    LoginSerializer,
+    TokenResponseSerializer,
+    TokenRefreshRequestSerializer,
+    TokenRefreshResponseSerializer,
+    ChangePasswordSerializer,
+)
 from .services import AuthenticationService
 from utils.responses import success_response, error_response
 
@@ -79,9 +85,9 @@ class TokenRefreshView(APIView):
     permission_classes = [AllowAny]
     
     @extend_schema(
-        request={'type': 'object', 'properties': {'refresh': {'type': 'string'}}},
+        request=TokenRefreshRequestSerializer,
         responses={
-            200: {'type': 'object', 'properties': {'access': {'type': 'string'}}},
+            200: TokenRefreshResponseSerializer,
             400: OpenApiResponse(description='Token de refresco requerido'),
             401: OpenApiResponse(description='Token inválido'),
         },

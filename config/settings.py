@@ -287,6 +287,11 @@ SPECTACULAR_SETTINGS = {
     'AUTHENTICATION_WHITELIST': [
         'apps.audit.authentication.AuditJWTAuthentication',
     ],
+    # Evita el warning "multiple names for the same choice set" en DifficultyEnum
+    # (tanto Question como Exam definen DIFFICULTY_CHOICES con los mismos valores)
+    'ENUM_NAME_OVERRIDES': {
+        'DifficultyEnum': 'apps.questions.models.Question.DIFFICULTY_CHOICES',
+    },
 }
 
 LOGGING_CONFIG = None

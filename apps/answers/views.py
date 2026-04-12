@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema, OpenApiResponse
 from loguru import logger
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -30,6 +31,12 @@ _NO_PERMISSION_MSG = 'No tiene permiso para ver estas respuestas.'
 class SubmitExamAnswersView(APIView):
     permission_classes = [IsAuthenticated, IsStudent]
 
+    @extend_schema(
+        request=SubmitExamSerializer,
+        responses={201: OpenApiResponse(description='Respuestas registradas exitosamente')},
+        summary='Enviar respuestas de examen',
+        tags=['Respuestas'],
+    )
     def post(self, request):
         serializer = SubmitExamSerializer(data=request.data)
         if not serializer.is_valid():
@@ -259,6 +266,12 @@ class SubmitExamAnswersView(APIView):
 class ManualGradeAnswerView(APIView):
     permission_classes = [IsAuthenticated, IsTeacherOrAdmin]
 
+    @extend_schema(
+        request=ManualGradeSerializer,
+        responses={200: OpenApiResponse(description='Calificación manual aplicada exitosamente')},
+        summary='Calificar respuesta manualmente',
+        tags=['Respuestas'],
+    )
     def post(self, request):
         serializer = ManualGradeSerializer(data=request.data)
         if not serializer.is_valid():
@@ -312,6 +325,11 @@ class ManualGradeAnswerView(APIView):
 class AssignmentAnswersView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        responses={200: OpenApiResponse(description='Respuestas de la asignación')},
+        summary='Obtener respuestas de una asignación',
+        tags=['Respuestas'],
+    )
     def get(self, request, assignment_id: int):
         assignment = (
             ExamAssignment.objects.select_related('exam', 'student')
