@@ -5,13 +5,17 @@ All endpoints are restricted to users with the 'teacher' or 'admin' role.
 PATCH is reserved exclusively for status changes; full edits use PUT.
 """
 
+import hashlib
+import re
 from io import BytesIO
+from urllib.parse import quote
 
 from loguru import logger
 from django.http import HttpResponse
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.views import APIView
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
@@ -20,7 +24,7 @@ from openpyxl.styles import Font, Alignment
 
 from rest_framework.throttling import UserRateThrottle
 
-from .models import Exam, ExamQuestion
+from .models import Exam, ExamQuestion, ExamAssignment
 from .serializers import (
     ExamSerializer,
     ExamCreateSerializer,
@@ -84,6 +88,28 @@ def _get_user_role(request):
     if role is None and request.auth is not None:
         role = request.auth.get('role')
     return role
+
+
+def _deterministic_shuffle(items, seed_str):
+    """
+    Deterministically reorder items based on a seed string using cryptographic hashing.
+    This provides reproducible shuffling without using pseudorandom generators.
+    Each unique seed produces a unique but consistent order.
+    """
+    if len(items) <= 1:
+        return items
+    
+    # Create a list of (item, sort_key) tuples
+    indexed_items = []
+    for i, item in enumerate(items):
+        # Generate a hash-based sort key for each item
+        hash_input = f"{seed_str}-{i}".encode('utf-8')
+        hash_value = hashlib.sha256(hash_input).hexdigest()
+        indexed_items.append((item, hash_value))
+    
+    # Sort by hash value to get deterministic ordering
+    indexed_items.sort(key=lambda x: x[1])
+    return [item for item, _ in indexed_items]
 
 
 def _can_access_exam(request, exam):
@@ -207,13 +233,20 @@ class ExamQuestionsView(APIView):
     PUT: reemplaza el conjunto de preguntas; el orden del array solo afecta el orden de esa lista administrativa.
     Todas las preguntas deben ser de la misma materia que el examen.
     """
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAuthenticated]
 
     def _get_exam(self, exam_id):
         try:
             return Exam.objects.select_related('id_subject', 'id_teacher').get(pk=exam_id)
         except Exam.DoesNotExist:
             return None
+
+    def _get_student_assignment(self, request, exam):
+        """Return assignment object for current student in the target exam, if any."""
+        return ExamAssignment.objects.filter(
+            exam_id=exam.id_exam,
+            student_id=request.user.pk,
+        ).first()
 
     @extend_schema(
         summary='Listar preguntas del examen',
@@ -224,14 +257,32 @@ class ExamQuestionsView(APIView):
         exam = self._get_exam(exam_id)
         if not exam:
             return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
-        if not _can_access_exam(request, exam):
+
+        role = _get_user_role(request)
+        student_assignment = None
+        if role in ('teacher', 'admin'):
+            if not _can_access_exam(request, exam):
+                return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+        elif role == 'student':
+            student_assignment = self._get_student_assignment(request, exam)
+            if not student_assignment:
+                return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+        else:
             return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
 
         eqs = (
             exam.exam_questions.select_related('id_question')
+            .prefetch_related('id_question__answers', 'id_question__code_question')
             .order_by('id_exam_question')
         )
         data = [serialize_exam_question_link(eq) for eq in eqs]
+
+        # Students receive a per-assignment shuffled order so different students
+        # get different sequences while each student keeps a stable order.
+        if role == 'student' and student_assignment and len(data) > 1:
+            seed = f"{student_assignment.pk}-{student_assignment.student_id}-{exam.id_exam}"
+            data = _deterministic_shuffle(data, seed)
+
         return success_response({'questions': data})
 
     @extend_schema(
@@ -244,6 +295,10 @@ class ExamQuestionsView(APIView):
         exam = self._get_exam(exam_id)
         if not exam:
             return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        role = _get_user_role(request)
+        if role not in ('teacher', 'admin'):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
         if not _can_access_exam(request, exam):
             return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
 
@@ -260,6 +315,7 @@ class ExamQuestionsView(APIView):
         eqs = (
             ExamQuestion.objects.filter(id_exam=exam)
             .select_related('id_question')
+            .prefetch_related('id_question__answers', 'id_question__code_question')
             .order_by('id_exam_question')
         )
         data = [serialize_exam_question_link(eq) for eq in eqs]
@@ -873,3 +929,156 @@ class MyAssignmentsView(APIView):
 
         logger.info('Student assignments listed | student={} count={}', request.user.pk, count)
         return success_response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Grade export (PDF / Excel)
+# ---------------------------------------------------------------------------
+
+def _build_export_filename(exam, group, ext: str) -> str:
+    """
+    Build a sanitised export filename:
+      [exam_name]-calificaciones-[academic_level][group_letter] (Gen [year]).[ext]
+
+    Characters forbidden in filenames and HTTP headers (null bytes, newlines,
+    path separators, Windows reserved chars) are stripped before use.
+    The filename* parameter uses RFC 5987 percent-encoding for full Unicode support.
+    """
+    from apps.academic.services import PeriodService
+
+    level = PeriodService.sync_group_academic_level(group)
+    gen_year = group.id_generation.year if group.id_generation else ''
+    group_part = f'{level}{group.group_letter} (Gen {gen_year})'
+
+    raw_exam = exam.name or exam.title or 'examen'
+    # Strip characters that are invalid in filenames or HTTP header values
+    _UNSAFE = r'[\x00\r\n/\\:*?"<>|]'
+    safe_exam = re.sub(_UNSAFE, '', raw_exam).strip()[:80]
+    safe_group = re.sub(_UNSAFE, '', group_part).strip()[:40]
+
+    return f'{safe_exam}-calificaciones-{safe_group}.{ext}'
+
+
+class _GradeExportThrottle(UserRateThrottle):
+    """Dedicated throttle scope for grade file exports."""
+    scope = 'grade_export'
+
+
+class _BaseGradeExportView(APIView):
+    """
+    Shared logic for PDF and Excel grade export endpoints.
+    Validates exam existence, ownership, and group assignment.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+    throttle_classes = [_GradeExportThrottle]
+
+    def _validate_exam_group(self, request, exam_id, group_id):
+        """
+        Return (exam, group) tuple or an error Response.
+        """
+        from apps.academic.models import Group
+
+        try:
+            exam = Exam.objects.select_related('id_subject', 'id_teacher').get(pk=exam_id)
+        except Exam.DoesNotExist:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        from .models import ExamGroupAssignment as EGA
+        if not EGA.objects.filter(exam=exam, group_id=group_id).exists():
+            return error_response(MSG_GROUP_NOT_ASSIGNED, status_code=status.HTTP_404_NOT_FOUND)
+
+        try:
+            group = Group.objects.select_related('id_generation').get(pk=group_id)
+        except Group.DoesNotExist:
+            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+
+        return exam, group
+
+
+class ExamGradeExportExcelView(_BaseGradeExportView):
+    """
+    GET /api/exams/{exam_id}/grades/groups/{group_id}/export/excel/
+    Downloads an Excel file with the grades for the specified exam + group.
+    """
+
+    @extend_schema(
+        summary='Exportar calificaciones a Excel',
+        tags=['Exportación de Calificaciones'],
+        responses={
+            200: OpenApiResponse(description='Archivo Excel (.xlsx)'),
+            403: OpenApiResponse(description='Sin permisos'),
+            404: OpenApiResponse(description='Examen o grupo no encontrado'),
+        },
+    )
+    def get(self, request, exam_id, group_id):
+        result = self._validate_exam_group(request, exam_id, group_id)
+        if not isinstance(result, tuple):
+            return result
+
+        exam, group = result
+
+        from .services import GradeExportService
+        buf = GradeExportService.generate_excel(exam, group)
+
+        filename = _build_export_filename(exam, group, 'xlsx')
+
+        response = HttpResponse(
+            buf.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = (
+            f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
+        )
+        buf.close()
+
+        logger.info(
+            'Grade Excel exported | exam={} group={} user={}',
+            exam_id, group_id, request.user.pk,
+        )
+        return response
+
+
+class ExamGradeExportPDFView(_BaseGradeExportView):
+    """
+    GET /api/exams/{exam_id}/grades/groups/{group_id}/export/pdf/
+    Downloads a PDF file with the grades for the specified exam + group.
+    """
+
+    @extend_schema(
+        summary='Exportar calificaciones a PDF',
+        tags=['Exportación de Calificaciones'],
+        responses={
+            200: OpenApiResponse(description='Archivo PDF'),
+            403: OpenApiResponse(description='Sin permisos'),
+            404: OpenApiResponse(description='Examen o grupo no encontrado'),
+        },
+    )
+    def get(self, request, exam_id, group_id):
+        result = self._validate_exam_group(request, exam_id, group_id)
+        if not isinstance(result, tuple):
+            return result
+
+        exam, group = result
+
+        from .services import GradeExportService
+        buf = GradeExportService.generate_pdf(exam, group)
+
+        filename = _build_export_filename(exam, group, 'pdf')
+
+        response = HttpResponse(
+            buf.getvalue(),
+            content_type='application/pdf',
+        )
+        response['Content-Disposition'] = (
+            f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
+        )
+        buf.close()
+
+        logger.info(
+            'Grade PDF exported | exam={} group={} user={}',
+            exam_id, group_id, request.user.pk,
+        )
+        return response
