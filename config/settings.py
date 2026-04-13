@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'apps.academic',
     'apps.questions',
     'apps.exams',
+    'apps.answers',
     'apps.audit',
 ]
 
@@ -170,6 +171,8 @@ REST_FRAMEWORK = {
         'student_assignments': config('THROTTLE_STUDENT_RATE', default=_THROTTLE_RATE_STANDARD),
         'created_by_me': config('THROTTLE_CREATED_BY_ME_RATE', default=_THROTTLE_RATE_STANDARD),
         'teacher_subjects': config('THROTTLE_TEACHER_SUBJECTS_RATE', default=_THROTTLE_RATE_STANDARD),
+        'teacher_my_groups': config('THROTTLE_TEACHER_MY_GROUPS_RATE', default=_THROTTLE_RATE_STANDARD),
+        'grade_export': config('THROTTLE_GRADE_EXPORT_RATE', default='30/minute'),
     },
 }
 
@@ -285,6 +288,11 @@ SPECTACULAR_SETTINGS = {
     'AUTHENTICATION_WHITELIST': [
         'apps.audit.authentication.AuditJWTAuthentication',
     ],
+    # Evita el warning "multiple names for the same choice set" en DifficultyEnum
+    # (tanto Question como Exam definen DIFFICULTY_CHOICES con los mismos valores)
+    'ENUM_NAME_OVERRIDES': {
+        'DifficultyEnum': 'apps.questions.models.Question.DIFFICULTY_CHOICES',
+    },
 }
 
 LOGGING_CONFIG = None
@@ -362,3 +370,13 @@ LOGGING = {
         'level': 'DEBUG',
     },
 }
+
+
+# ------------------------------------------------------------------
+# APScheduler Configuration
+# ------------------------------------------------------------------
+# APScheduler is used to automatically advance academic levels on:
+# - January 1 at 00:00 (Periodo Enero-Abril)
+# - May 1 at 00:00 (Periodo Mayo-Agosto)
+# - September 1 at 00:00 (Periodo Septiembre-Diciembre)
+APSCHEDULER_ENABLED = config('APSCHEDULER_ENABLED', default=True, cast=bool)

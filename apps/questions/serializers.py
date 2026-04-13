@@ -3,8 +3,12 @@ Serializers for the Question bank (CRUD, nested answers, code questions).
 """
 
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
+
+from apps.academic.models import Subject
 
 from .models import Question, Answer, CodeQuestion
+from .subject_access import allowed_subject_ids_for_question_user
 
 
 QUESTION_TYPE_VALUES = {c[0] for c in Question.QUESTION_TYPE_CHOICES}
@@ -57,6 +61,14 @@ class CodeQuestionPayloadSerializer(serializers.Serializer):
         return value if value is not None else []
 
 
+@extend_schema_field({
+    'type': 'object',
+    'nullable': True,
+    'properties': {
+        'language': {'type': 'string', 'example': 'python'},
+        'test_cases': {'type': 'array', 'items': {'type': 'string'}},
+    },
+})
 class CodeQuestionField(serializers.Field):
     """Read/write helper: avoids OneToOne DoesNotExist issues on serialization."""
 
@@ -92,6 +104,17 @@ class QuestionSerializer(serializers.ModelSerializer):
     text = serializers.CharField(source='statement')
     answer_options = AnswerOptionSerializer(many=True, source='answers', required=False)
     code_question = CodeQuestionField()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        field = self.fields.get('id_subject')
+        if field is not None and request is not None:
+            qs = Subject.objects.filter(status=True)
+            allowed = allowed_subject_ids_for_question_user(request.user)
+            if allowed is not None:
+                qs = qs.filter(pk__in=allowed)
+            field.queryset = qs
 
     class Meta:
         model = Question

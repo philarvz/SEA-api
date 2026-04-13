@@ -5,7 +5,7 @@ Encapsulates business logic for exam CRUD operations.
 
 from loguru import logger
 from django.utils import timezone
-from django.db.models import Q
+from django.db.models import Q, F, Case, When, DateTimeField
 
 from .models import Exam, ExamAssignment, ExamGroupAssignment, ExamQuestion
 from apps.academic.models import Subject
@@ -406,6 +406,7 @@ class ExamAssignmentService:
         from django.db.models import Avg, Count, Max, Min
         from decimal import Decimal
 
+        ExamAssignmentService.finalize_expired_assignments_for_exam(exam)
         minimum = exam.minimum_score
 
         # --- 1. Aggregate student stats per group in one query ----------------
@@ -504,6 +505,7 @@ class ExamAssignmentService:
         Optional status_filter: 'pending' | 'in_progress' | 'completed'.
         Optional search: case-insensitive match on first_name, last_name, or matricula.
         """
+        ExamAssignmentService.finalize_expired_assignments_for_exam(exam)
         qs = (
             ExamAssignment.objects
             .filter(exam=exam, group_id=group_id)
@@ -528,6 +530,8 @@ class ExamAssignmentService:
         Optional filters: status (str|None), include_completed (bool).
         Expects params already validated by MyAssignmentQuerySerializer.
         """
+        ExamAssignmentService.finalize_expired_assignments_for_student(student_pk)
+
         queryset = ExamAssignment.objects.select_related(
             'exam', 'exam__id_subject', 'group', 'group__id_generation',
         ).filter(
@@ -546,3 +550,279 @@ class ExamAssignmentService:
             queryset = queryset.filter(status=status_param)
 
         return queryset
+
+    @staticmethod
+    def finalize_expired_assignments_for_exam(exam) -> int:
+        """
+        Auto-close overdue assignments for an exam with score 0.
+        Applies to assignments still in pending/in_progress when period already ended.
+        """
+        now = timezone.now()
+        updated = ExamAssignment.objects.filter(
+            exam=exam,
+            available_to__lt=now,
+        ).exclude(status='completed').update(
+            status='completed',
+            score=0,
+            is_passed=False,
+            attempt_date=Case(
+                When(attempt_date__isnull=True, then=F('available_to')),
+                default=F('attempt_date'),
+                output_field=DateTimeField(),
+            ),
+        )
+        return updated
+
+    @staticmethod
+    def finalize_expired_assignments_for_student(student_pk: int) -> int:
+        """
+        Auto-close overdue assignments for a student with score 0.
+        """
+        now = timezone.now()
+        updated = ExamAssignment.objects.filter(
+            student_id=student_pk,
+            available_to__lt=now,
+        ).exclude(status='completed').update(
+            status='completed',
+            score=0,
+            is_passed=False,
+            attempt_date=Case(
+                When(attempt_date__isnull=True, then=F('available_to')),
+                default=F('attempt_date'),
+                output_field=DateTimeField(),
+            ),
+        )
+        return updated
+
+
+class GradeExportService:
+    """
+    Builds in-memory Excel (openpyxl) and PDF (reportlab) files
+    for the grades of a single exam + group combination.
+    """
+
+    STATUS_LABELS = {
+        'pending': 'Pendiente',
+        'in_progress': 'En progreso',
+        'completed': 'Completado',
+    }
+
+    GRADING_STATUS_LABELS = {
+        'graded': 'Calificado',
+        'partially_graded': 'Parcialmente calificado',
+        'not_graded': 'Sin calificar',
+    }
+
+    @classmethod
+    def _build_rows(cls, exam, group_id):
+        """
+        Return a list of dicts with the data for each student row,
+        plus a report_status string summarising the grading progress.
+        """
+        from apps.answers.models import StudentAnswer
+
+        ExamAssignmentService.finalize_expired_assignments_for_exam(exam)
+
+        assignments = (
+            ExamAssignment.objects
+            .filter(exam=exam, group_id=group_id)
+            .select_related('student')
+            .order_by('student__last_name', 'student__first_name')
+        )
+
+        total_questions = ExamQuestion.objects.filter(id_exam=exam).count()
+
+        rows = []
+        grading_complete = True
+
+        for assignment in assignments:
+            student = assignment.student
+            status_label = cls.STATUS_LABELS.get(assignment.status, assignment.status)
+
+            if assignment.status != 'completed':
+                grading_status = cls.GRADING_STATUS_LABELS['not_graded']
+                grading_complete = False
+            elif total_questions == 0:
+                grading_status = cls.GRADING_STATUS_LABELS['graded']
+            else:
+                evaluated = StudentAnswer.objects.filter(
+                    exam_assignment=assignment,
+                    evaluated_at__isnull=False,
+                ).count()
+
+                if evaluated >= total_questions:
+                    grading_status = cls.GRADING_STATUS_LABELS['graded']
+                elif evaluated > 0:
+                    grading_status = cls.GRADING_STATUS_LABELS['partially_graded']
+                    grading_complete = False
+                else:
+                    grading_status = cls.GRADING_STATUS_LABELS['not_graded']
+                    grading_complete = False
+
+            score_display = str(assignment.score) if assignment.score is not None else '--'
+
+            rows.append({
+                'matricula': student.matricula or '',
+                'full_name': f'{student.first_name} {student.last_name}',
+                'score': score_display,
+                'status': status_label,
+                'grading_status': grading_status,
+            })
+
+        report_status = 'Calificación completa' if grading_complete else 'Calificación en progreso'
+        return rows, report_status
+
+    @classmethod
+    def _get_metadata(cls, exam, group):
+        """Return dict with header metadata for the export files."""
+        from apps.academic.services import PeriodService
+
+        gen = group.id_generation
+        level = PeriodService.sync_group_academic_level(group)
+        group_label = f'{level}{group.group_letter} (Gen {gen.year})'
+        subject_name = exam.id_subject.name if exam.id_subject else ''
+
+        return {
+            'exam_name': exam.name or exam.title,
+            'group_label': group_label,
+            'subject_name': subject_name,
+            'export_date': timezone.now().strftime('%d/%m/%Y %H:%M'),
+            'institution': 'Sistema de Evaluación Académica (SEA)',
+        }
+
+    @classmethod
+    def generate_excel(cls, exam, group):
+        """Return a BytesIO buffer containing the .xlsx workbook."""
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from io import BytesIO
+
+        rows, _ = cls._build_rows(exam, group.pk)
+        meta = cls._get_metadata(exam, group)
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Calificaciones'
+
+        sub_font = Font(size=10)
+        table_header_font = Font(bold=True, size=10, color='FFFFFF')
+        table_header_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
+        table_header_align = Alignment(horizontal='center', vertical='center')
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin'),
+        )
+
+        ws.merge_cells('A1:E1')
+        ws['A1'] = meta['institution']
+        ws['A1'].font = Font(bold=True, size=14)
+        ws['A1'].alignment = Alignment(horizontal='center')
+
+        info_rows = [
+            ('Examen:', meta['exam_name']),
+            ('Materia:', meta['subject_name']),
+            ('Grupo:', meta['group_label']),
+            ('Fecha de exportación:', meta['export_date']),
+        ]
+        for i, (label, value) in enumerate(info_rows, start=3):
+            ws.cell(row=i, column=1, value=label).font = Font(bold=True, size=10)
+            ws.cell(row=i, column=2, value=value).font = sub_font
+
+        table_start = len(info_rows) + 4
+        table_headers = ['Matrícula', 'Nombre completo', 'Calificación', 'Estado']
+        for col_idx, th in enumerate(table_headers, start=1):
+            cell = ws.cell(row=table_start, column=col_idx, value=th)
+            cell.font = table_header_font
+            cell.fill = table_header_fill
+            cell.alignment = table_header_align
+            cell.border = thin_border
+
+        for row_idx, row_data in enumerate(rows, start=table_start + 1):
+            ws.cell(row=row_idx, column=1, value=row_data['matricula']).border = thin_border
+            ws.cell(row=row_idx, column=2, value=row_data['full_name']).border = thin_border
+            ws.cell(row=row_idx, column=3, value=row_data['score']).border = thin_border
+            ws.cell(row=row_idx, column=4, value=row_data['status']).border = thin_border
+
+        col_widths = [18, 35, 15, 18]
+        for i, width in enumerate(col_widths, start=1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = width
+
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf
+
+    @classmethod
+    def generate_pdf(cls, exam, group):
+        """Return a BytesIO buffer containing the PDF document."""
+        from io import BytesIO
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+        rows, _ = cls._build_rows(exam, group.pk)
+        meta = cls._get_metadata(exam, group)
+
+        buf = BytesIO()
+        doc = SimpleDocTemplate(
+            buf, pagesize=landscape(letter),
+            leftMargin=0.5 * inch, rightMargin=0.5 * inch,
+            topMargin=0.5 * inch, bottomMargin=0.5 * inch,
+        )
+
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle', parent=styles['Title'], fontSize=16, spaceAfter=6,
+        )
+        info_style = ParagraphStyle(
+            'CustomInfo', parent=styles['Normal'], fontSize=10, spaceAfter=2,
+        )
+
+        elements = []
+        elements.append(Paragraph(meta['institution'], title_style))
+        elements.append(Spacer(1, 6))
+
+        info_lines = [
+            f"<b>Examen:</b> {meta['exam_name']}",
+            f"<b>Materia:</b> {meta['subject_name']}",
+            f"<b>Grupo:</b> {meta['group_label']}",
+            f"<b>Fecha de exportación:</b> {meta['export_date']}",
+        ]
+        for line in info_lines:
+            elements.append(Paragraph(line, info_style))
+        elements.append(Spacer(1, 14))
+
+        table_data = [['Matrícula', 'Nombre completo', 'Calificación', 'Estado']]
+        for r in rows:
+            table_data.append([
+                r['matricula'],
+                r['full_name'],
+                r['score'],
+                r['status'],
+            ])
+
+        col_widths = [1.5 * inch, 3.5 * inch, 1.4 * inch, 1.8 * inch]
+        t = Table(table_data, colWidths=col_widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E79')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('ALIGN', (2, 1), (2, -1), 'CENTER'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        elements.append(t)
+
+        doc.build(elements)
+        buf.seek(0)
+        return buf

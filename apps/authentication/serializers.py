@@ -26,6 +26,16 @@ class LoginSerializer(serializers.Serializer):
         fields = ['email', 'password']
 
 
+class TokenRefreshRequestSerializer(serializers.Serializer):
+    """Serializer for token refresh requests."""
+    refresh = serializers.CharField(required=True, help_text='JWT refresh token')
+
+
+class TokenRefreshResponseSerializer(serializers.Serializer):
+    """Serializer for token refresh responses."""
+    access = serializers.CharField(read_only=True)
+
+
 class TokenResponseSerializer(serializers.Serializer):
     """
     Serializer for token response.

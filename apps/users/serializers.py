@@ -5,6 +5,7 @@ Covers: user registration input validation and response shape.
 
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from drf_spectacular.utils import extend_schema_field
 from apps.academic.services import PeriodService
 
 User = get_user_model()
@@ -212,6 +213,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(GroupSummarySerializer(allow_null=True))
     def get_group(self, obj: User):
         if obj.role == 'student':
             try:
@@ -227,6 +229,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
                 pass
         return None
 
+    @extend_schema_field(SubjectSummarySerializer(many=True))
     def get_subjects(self, obj: User):
         if obj.role == 'teacher':
             try:
@@ -268,10 +271,12 @@ class UserListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.CharField())
     def get_status_display(self, obj: User):
         """Retorna el estado en formato legible"""
         return 'Activo' if obj.status else 'Inactivo'
 
+    @extend_schema_field(GroupSummarySerializer(allow_null=True))
     def get_group(self, obj: User):
         """Retorna información del grupo si es estudiante"""
         if obj.role == 'student':
@@ -288,6 +293,7 @@ class UserListSerializer(serializers.ModelSerializer):
                 pass
         return None
 
+    @extend_schema_field(SubjectSummarySerializer(many=True))
     def get_subjects(self, obj: User):
         """Retorna lista de materias si es docente"""
         if obj.role == 'teacher':

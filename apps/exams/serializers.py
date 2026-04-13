@@ -5,7 +5,7 @@ Covers: Exam CRUD operations with academic validation.
 
 from rest_framework import serializers
 from django.utils import timezone
-
+from drf_spectacular.utils import extend_schema_field
 from .models import Exam, ExamAssignment, ExamQuestion
 from apps.academic.models import Subject, Unit, Group
 
@@ -96,6 +96,7 @@ class GroupStudentGradeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.CharField())
     def get_status_label(self, obj):
         return STATUS_LABELS.get(obj.status, obj.status)
 
@@ -126,6 +127,7 @@ class _BaseExamOutputSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_unit_name(self, obj):
         return _get_unit_name_from_db(obj.id_subject, obj.unit_number)
 
@@ -146,6 +148,7 @@ class ExamSerializer(_BaseExamOutputSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.CharField())
     def get_teacher_name(self, obj):
         return f"{obj.id_teacher.first_name} {obj.id_teacher.last_name}"
 
@@ -157,6 +160,7 @@ class CreatedByMeExamSerializer(_BaseExamOutputSerializer):
     Overrides get_unit_name to use prefetched units (avoids N+1).
     """
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_unit_name(self, obj):
         for unit in obj.id_subject.units.all():
             if unit.unit_number == obj.unit_number:
@@ -211,14 +215,38 @@ class ExamQuestionsReplaceSerializer(serializers.Serializer):
 def serialize_exam_question_link(eq: ExamQuestion) -> dict:
     """One row for GET /exams/{id}/questions/."""
     qq = eq.id_question
+
+    answers = []
+    if qq.question_type in ('MULTIPLE_CHOICE', 'MULTIPLE_SELECTION'):
+        answers = [
+            {
+                'id_answer': answer.id_answer,
+                'answer_text': answer.answer_text,
+            }
+            for answer in qq.answers.all().order_by('id_answer')
+        ]
+
+    code_question = None
+    if qq.question_type == 'CODE':
+        cq = getattr(qq, 'code_question', None)
+        if cq:
+            code_question = {
+                'language': cq.language,
+                'test_cases': cq.test_cases,
+            }
+
     return {
         'id_exam_question': eq.id_exam_question,
         'id_exam': eq.id_exam_id,
         'id_question': qq.id_question,
         'text': qq.statement,
+        'image_url': qq.image_url,
         'question_type': qq.question_type,
         'difficulty': qq.difficulty,
         'bloom_level': qq.bloom_level,
+        'points': qq.points,
+        'answers': answers,
+        'code_question': code_question,
     }
 
 
@@ -356,6 +384,7 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
     is_available = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
     can_start = serializers.SerializerMethodField()
+    can_review = serializers.SerializerMethodField()
 
     class Meta:
         model = ExamAssignment
@@ -369,24 +398,32 @@ class MyAssignmentSerializer(serializers.ModelSerializer):
             'status', 'score', 'is_passed',
             'assigned_at', 'available_from', 'available_to',
             'attempt_date',
-            'is_available', 'is_expired', 'can_start',
+            'is_available', 'is_expired', 'can_start', 'can_review',
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.CharField())
     def get_group_label(self, obj):
         return str(obj.group)
 
+    @extend_schema_field(serializers.BooleanField())
     def get_is_available(self, obj):
         now = timezone.now()
         return obj.available_from <= now <= obj.available_to
 
+    @extend_schema_field(serializers.BooleanField())
     def get_is_expired(self, obj):
         return timezone.now() > obj.available_to
 
+    @extend_schema_field(serializers.BooleanField())
     def get_can_start(self, obj):
         now = timezone.now()
         within_window = obj.available_from <= now <= obj.available_to
         return within_window and obj.status in ('pending', 'in_progress')
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_can_review(self, obj):
+        return obj.status == 'completed' and timezone.now() > obj.available_to
 
 
 # ---------------------------------------------------------------------------
