@@ -6,7 +6,9 @@ PATCH is reserved exclusively for status changes; full edits use PUT.
 """
 
 import hashlib
+import re
 from io import BytesIO
+from urllib.parse import quote
 
 from loguru import logger
 from django.http import HttpResponse
@@ -927,3 +929,156 @@ class MyAssignmentsView(APIView):
 
         logger.info('Student assignments listed | student={} count={}', request.user.pk, count)
         return success_response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Grade export (PDF / Excel)
+# ---------------------------------------------------------------------------
+
+def _build_export_filename(exam, group, ext: str) -> str:
+    """
+    Build a sanitised export filename:
+      [exam_name]-calificaciones-[academic_level][group_letter] (Gen [year]).[ext]
+
+    Characters forbidden in filenames and HTTP headers (null bytes, newlines,
+    path separators, Windows reserved chars) are stripped before use.
+    The filename* parameter uses RFC 5987 percent-encoding for full Unicode support.
+    """
+    from apps.academic.services import PeriodService
+
+    level = PeriodService.sync_group_academic_level(group)
+    gen_year = group.id_generation.year if group.id_generation else ''
+    group_part = f'{level}{group.group_letter} (Gen {gen_year})'
+
+    raw_exam = exam.name or exam.title or 'examen'
+    # Strip characters that are invalid in filenames or HTTP header values
+    _UNSAFE = r'[\x00\r\n/\\:*?"<>|]'
+    safe_exam = re.sub(_UNSAFE, '', raw_exam).strip()[:80]
+    safe_group = re.sub(_UNSAFE, '', group_part).strip()[:40]
+
+    return f'{safe_exam}-calificaciones-{safe_group}.{ext}'
+
+
+class _GradeExportThrottle(UserRateThrottle):
+    """Dedicated throttle scope for grade file exports."""
+    scope = 'grade_export'
+
+
+class _BaseGradeExportView(APIView):
+    """
+    Shared logic for PDF and Excel grade export endpoints.
+    Validates exam existence, ownership, and group assignment.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+    throttle_classes = [_GradeExportThrottle]
+
+    def _validate_exam_group(self, request, exam_id, group_id):
+        """
+        Return (exam, group) tuple or an error Response.
+        """
+        from apps.academic.models import Group
+
+        try:
+            exam = Exam.objects.select_related('id_subject', 'id_teacher').get(pk=exam_id)
+        except Exam.DoesNotExist:
+            return error_response(MSG_EXAM_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if not _can_access_exam(request, exam):
+            return error_response(MSG_NO_PERMISSION, status_code=status.HTTP_403_FORBIDDEN)
+
+        from .models import ExamGroupAssignment as EGA
+        if not EGA.objects.filter(exam=exam, group_id=group_id).exists():
+            return error_response(MSG_GROUP_NOT_ASSIGNED, status_code=status.HTTP_404_NOT_FOUND)
+
+        try:
+            group = Group.objects.select_related('id_generation').get(pk=group_id)
+        except Group.DoesNotExist:
+            return error_response('Grupo no encontrado.', status_code=status.HTTP_404_NOT_FOUND)
+
+        return exam, group
+
+
+class ExamGradeExportExcelView(_BaseGradeExportView):
+    """
+    GET /api/exams/{exam_id}/grades/groups/{group_id}/export/excel/
+    Downloads an Excel file with the grades for the specified exam + group.
+    """
+
+    @extend_schema(
+        summary='Exportar calificaciones a Excel',
+        tags=['Exportación de Calificaciones'],
+        responses={
+            200: OpenApiResponse(description='Archivo Excel (.xlsx)'),
+            403: OpenApiResponse(description='Sin permisos'),
+            404: OpenApiResponse(description='Examen o grupo no encontrado'),
+        },
+    )
+    def get(self, request, exam_id, group_id):
+        result = self._validate_exam_group(request, exam_id, group_id)
+        if not isinstance(result, tuple):
+            return result
+
+        exam, group = result
+
+        from .services import GradeExportService
+        buf = GradeExportService.generate_excel(exam, group)
+
+        filename = _build_export_filename(exam, group, 'xlsx')
+
+        response = HttpResponse(
+            buf.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = (
+            f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
+        )
+        buf.close()
+
+        logger.info(
+            'Grade Excel exported | exam={} group={} user={}',
+            exam_id, group_id, request.user.pk,
+        )
+        return response
+
+
+class ExamGradeExportPDFView(_BaseGradeExportView):
+    """
+    GET /api/exams/{exam_id}/grades/groups/{group_id}/export/pdf/
+    Downloads a PDF file with the grades for the specified exam + group.
+    """
+
+    @extend_schema(
+        summary='Exportar calificaciones a PDF',
+        tags=['Exportación de Calificaciones'],
+        responses={
+            200: OpenApiResponse(description='Archivo PDF'),
+            403: OpenApiResponse(description='Sin permisos'),
+            404: OpenApiResponse(description='Examen o grupo no encontrado'),
+        },
+    )
+    def get(self, request, exam_id, group_id):
+        result = self._validate_exam_group(request, exam_id, group_id)
+        if not isinstance(result, tuple):
+            return result
+
+        exam, group = result
+
+        from .services import GradeExportService
+        buf = GradeExportService.generate_pdf(exam, group)
+
+        filename = _build_export_filename(exam, group, 'pdf')
+
+        response = HttpResponse(
+            buf.getvalue(),
+            content_type='application/pdf',
+        )
+        response['Content-Disposition'] = (
+            f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
+        )
+        buf.close()
+
+        logger.info(
+            'Grade PDF exported | exam={} group={} user={}',
+            exam_id, group_id, request.user.pk,
+        )
+        return response
