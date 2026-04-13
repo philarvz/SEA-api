@@ -189,6 +189,7 @@ class GroupSummarySerializer(serializers.Serializer):
     id_group = serializers.IntegerField()
     group_letter = serializers.CharField()
     academic_level = serializers.IntegerField()
+    generation_year = serializers.IntegerField()
 
 
 class SubjectSummarySerializer(serializers.Serializer):
@@ -202,6 +203,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(read_only=True)
     group = serializers.SerializerMethodField()
     subjects = serializers.SerializerMethodField()
+    teaching_groups = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -209,7 +211,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
             'id_user', 'email', 'username', 'matricula',
             'first_name', 'last_name', 'full_name',
             'role', 'is_active', 'date_joined',
-            'group', 'subjects',
+            'group', 'subjects', 'teaching_groups',
         ]
         read_only_fields = fields
 
@@ -224,6 +226,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
                         'id_group': profile.group.pk,
                         'group_letter': profile.group.group_letter,
                         'academic_level': calculated_level,
+                        'generation_year': profile.group.id_generation.year,
                     }
             except Exception:
                 pass
@@ -241,6 +244,29 @@ class UserResponseSerializer(serializers.ModelSerializer):
                 pass
         return []
 
+    @extend_schema_field(GroupSummarySerializer(many=True))
+    def get_teaching_groups(self, obj: User):
+        """Retorna los grupos donde el docente imparte clase (sin duplicados)."""
+        if obj.role == 'teacher':
+            try:
+                seen = set()
+                result = []
+                for assignment in obj.teacher_profile.group_assignments.all():
+                    group = assignment.group
+                    if group.pk not in seen:
+                        seen.add(group.pk)
+                        calculated_level = PeriodService.sync_group_academic_level(group)
+                        result.append({
+                            'id_group': group.pk,
+                            'group_letter': group.group_letter,
+                            'academic_level': calculated_level,
+                            'generation_year': group.id_generation.year,
+                        })
+                return result
+            except Exception:
+                pass
+        return []
+
 
 # ---------------------------------------------------------------------------
 # User List — Output
@@ -251,6 +277,7 @@ class UserListSerializer(serializers.ModelSerializer):
     group = serializers.SerializerMethodField()
     subjects = serializers.SerializerMethodField()
     status_display = serializers.SerializerMethodField()
+    teaching_groups = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -268,6 +295,7 @@ class UserListSerializer(serializers.ModelSerializer):
             'date_joined',
             'group',
             'subjects',
+            'teaching_groups',
         ]
         read_only_fields = fields
 
@@ -288,6 +316,7 @@ class UserListSerializer(serializers.ModelSerializer):
                         'id_group': profile.group.pk,
                         'group_letter': profile.group.group_letter,
                         'academic_level': calculated_level,
+                        'generation_year': profile.group.id_generation.year,
                     }
             except Exception:
                 pass
@@ -302,6 +331,29 @@ class UserListSerializer(serializers.ModelSerializer):
                     {'id_subject': s.pk, 'name': s.name}
                     for s in obj.teacher_profile.subjects.all()
                 ]
+            except Exception:
+                pass
+        return []
+
+    @extend_schema_field(GroupSummarySerializer(many=True))
+    def get_teaching_groups(self, obj: User):
+        """Retorna los grupos donde el docente imparte clase (sin duplicados)."""
+        if obj.role == 'teacher':
+            try:
+                seen = set()
+                result = []
+                for assignment in obj.teacher_profile.group_assignments.all():
+                    group = assignment.group
+                    if group.pk not in seen:
+                        seen.add(group.pk)
+                        calculated_level = PeriodService.sync_group_academic_level(group)
+                        result.append({
+                            'id_group': group.pk,
+                            'group_letter': group.group_letter,
+                            'academic_level': calculated_level,
+                            'generation_year': group.id_generation.year,
+                        })
+                return result
             except Exception:
                 pass
         return []

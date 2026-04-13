@@ -173,9 +173,11 @@ class UserListCreateView(APIView):
         queryset = User.objects.select_related(
             'student_profile',
             'student_profile__group',
+            'student_profile__group__id_generation',
             'teacher_profile',
         ).prefetch_related(
-            'teacher_profile__subjects'
+            'teacher_profile__subjects',
+            'teacher_profile__group_assignments__group__id_generation',
         ).order_by('-date_joined')
 
         # Filtro por rol
@@ -237,9 +239,11 @@ class UserDetailView(APIView):
             return User.objects.select_related(
                 'student_profile',
                 'student_profile__group',
+                'student_profile__group__id_generation',
                 'teacher_profile',
             ).prefetch_related(
-                'teacher_profile__subjects'
+                'teacher_profile__subjects',
+                'teacher_profile__group_assignments__group__id_generation',
             ).get(pk=pk)
         except User.DoesNotExist:
             return None
