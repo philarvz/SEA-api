@@ -1,8 +1,3 @@
-"""
-Plantilla .xlsx solo en español: hoja Materias (solo nombres) y hoja Plantilla
-con validación de datos (listas en español) y ejemplos de los cuatro tipos de pregunta.
-"""
-
 from __future__ import annotations
 
 from io import BytesIO
@@ -12,12 +7,12 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from apps.academic.models import Subject
-from apps.users.models import TeacherProfile
+
+from .subject_access import allowed_subject_ids_for_question_user
 
 FIRST_DATA_ROW = 2
 LAST_DATA_ROW = 5001
 
-# Etiquetas exactas de los desplegables (deben coincidir con parse_question_type)
 TYPE_OPTIONS_ES = [
     'Selección única',
     'Selección múltiple',
@@ -34,34 +29,22 @@ BLOOM_OPTIONS_ES = [
     'CREAR',
 ]
 
-
 def subjects_for_template_user(user) -> list[Subject]:
-    role = getattr(user, 'role', None)
-    if role == 'admin':
-        return list(
-            Subject.objects.filter(status=True).order_by('level_number', 'name')
-        )
-    try:
-        profile = TeacherProfile.objects.prefetch_related('subjects').get(user_id=user.pk)
-    except TeacherProfile.DoesNotExist:
-        return []
-    return list(
-        profile.subjects.filter(status=True).order_by('level_number', 'name')
-    )
-
+    allowed = allowed_subject_ids_for_question_user(user)
+    qs = Subject.objects.filter(status=True).order_by('level_number', 'name')
+    if allowed is not None:
+        qs = qs.filter(pk__in=allowed)
+    return list(qs)
 
 def _inline_list_formula(values: list[str]) -> str:
     return '"' + ','.join(values) + '"'
-
 
 def _add_list_validation(ws, col_letter: str, formula1: str) -> None:
     dv = DataValidation(type='list', formula1=formula1, allow_blank=True)
     ws.add_data_validation(dv)
     dv.add(f'{col_letter}{FIRST_DATA_ROW}:{col_letter}{LAST_DATA_ROW}')
 
-
 def _example_data_rows(subjects: list[Subject]) -> list[list]:
-    """Cuatro filas de ejemplo: un tipo de pregunta por fila."""
     sub = subjects[0].name if subjects else ''
     return [
         [
