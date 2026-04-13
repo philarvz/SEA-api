@@ -1,5 +1,6 @@
 from django.db.models import Avg, Max, Min
 from apps.exams.models import ExamAssignment
+from apps.academic.models import Group  # IMPORTANTE
 
 
 class ReportService:
@@ -115,16 +116,21 @@ class ReportService:
             'student', 'group', 'exam'
         ).filter(group_id=data['groupId'])
 
+    # 🔥 TRAER EL GRUPO DIRECTAMENTE (NO DESDE qs)
+        group = Group.objects.select_related('id_generation').filter(
+            id_group=data['groupId']
+        ).first()
+
         students_map = {}
 
         for r in qs:
             sid = r.student_id
 
             students_map.setdefault(sid, {
-                "studentId": sid,
-                "matricula": getattr(r.student, "matricula", ""),
-                "fullName": f"{r.student.first_name} {r.student.last_name}".strip() if r.student else "",
-                "scores": [],
+            "studentId": sid,
+            "matricula": getattr(r.student, "matricula", ""),
+            "fullName": f"{r.student.first_name} {r.student.last_name}".strip() if r.student else "",
+            "scores": [],
             })
 
             if r.score is not None:
@@ -149,20 +155,17 @@ class ReportService:
                 "approvalRate": (approved / len(scores)) * 100,
             })
 
-        group = qs.first().group if qs.exists() else None
-
         return {
             "groupId": getattr(group, "id_group", data['groupId']),
             "groupLetter": getattr(group, "group_letter", "") if group else "",
             "academicLevel": getattr(group, "academic_level", 0) if group else 0,
-            "generationYear": getattr(group.id_generation, "year", None) if group and hasattr(group, "id_generation") else None,
+            "generationYear": getattr(group.id_generation, "year", None) if group and group.id_generation else None,
 
             "metrics": ReportService._calculate_summary_metrics(qs),
             "gradeDistribution": ReportService._calculate_distribution(qs),
 
             "students": result
         }
-
     # ===== REPORT: BY STUDENT =====
 
     @staticmethod
