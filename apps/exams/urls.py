@@ -16,6 +16,8 @@ from .views import (
     ExamGroupStatsView,
     ExamGroupStatsByGroupView,
     ExamGroupStudentsView,
+    ExamGradeExportExcelView,
+    ExamGradeExportPDFView,
     MyAssignmentsView,
     CreatedByMeExamsView,
 )
@@ -35,6 +37,8 @@ urlpatterns = [
     path('<int:exam_id>/stats/groups/', ExamGroupStatsView.as_view(), name='exam-group-stats'),
     path('<int:exam_id>/stats/groups/<int:group_id>/', ExamGroupStatsByGroupView.as_view(), name='exam-group-stats-single'),
     path('<int:exam_id>/groups/<int:group_id>/students/', ExamGroupStudentsView.as_view(), name='exam-group-students'),
+    path('<int:exam_id>/grades/groups/<int:group_id>/export/excel/', ExamGradeExportExcelView.as_view(), name='exam-grade-export-excel'),
+    path('<int:exam_id>/grades/groups/<int:group_id>/export/pdf/', ExamGradeExportPDFView.as_view(), name='exam-grade-export-pdf'),
     path('created-by-me/', CreatedByMeExamsView.as_view(), name='exam-created-by-me'),
 
     # ------------------------------------------------------------------
