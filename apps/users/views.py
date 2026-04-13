@@ -191,7 +191,6 @@ class UserListCreateView(APIView):
             queryset = queryset.filter(status=status_bool)
             logger.debug('Filtering by status | status={}', status_bool)
 
-<<<<<<< HEAD
         # Filtro por grupo (solo para estudiantes)
         group = request.query_params.get('group', None)
         if group:
@@ -204,13 +203,6 @@ class UserListCreateView(APIView):
                 logger.debug('Filtering by group | group_id={}', group_id)
             except ValueError:
                 logger.warning('Invalid group parameter | group={}', group)
-=======
-        # Filtro por grupo (para listar alumnos de un grupo específico)
-        group_id = request.query_params.get('group_id', None)
-        if group_id:
-            queryset = queryset.filter(student_profile__group_id=group_id)
-            logger.debug('Filtering by group_id | group_id={}', group_id)
->>>>>>> develop
 
         # Búsqueda por texto
         search = request.query_params.get('search', None)
