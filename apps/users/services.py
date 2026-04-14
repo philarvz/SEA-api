@@ -263,14 +263,15 @@ class PasswordRecoveryService:
     """Servicio para gestionar la recuperación de contraseña"""
 
     @staticmethod
-    @transaction.atomic
     def request_password_reset(email: str) -> dict:
         """
-        Genera un código de 6 dígitos y lo envía por correo electrónico
-        
+        Genera un código de 6 dígitos y lo envía por correo electrónico.
+        La creación del código en BD y el envío del correo son operaciones
+        separadas: la BD se confirma primero y luego se envía el email.
+
         Args:
             email: Correo electrónico del usuario
-            
+
         Returns:
             dict con información del proceso
         """
@@ -281,37 +282,49 @@ class PasswordRecoveryService:
             logger.warning('Password reset requested for non-existent email | email={}', email)
             return {'message': 'Si el correo existe, recibirás un código de verificación.'}
 
-        # Invalidar códigos anteriores no usados para este usuario
-        PasswordResetCode.objects.filter(
-            user=user, 
-            is_used=False
-        ).update(is_used=True)
+        # Guardar el código en BD dentro de su propia transacción atómica.
+        # Esto se confirma ANTES de intentar enviar el correo para evitar
+        # que un fallo SMTP revierta el registro del código.
+        code = PasswordRecoveryService._create_reset_code(user)
 
-        # Generar código de 6 dígitos
-        code = ''.join(secrets.choice(string.digits) for _ in range(6))
-        
-        # Calcular tiempo de expiración (15 minutos)
-        expires_at = timezone.now() + timedelta(minutes=15)
-        
-        # Crear registro del código
-        PasswordResetCode.objects.create(
-            user=user,
-            code=code,
-            expires_at=expires_at
-        )
-
-        # Enviar email con el código
+        # Enviar email FUERA de la transacción (el código ya está persistido)
         try:
             PasswordRecoveryService._send_reset_code_email(user, code)
             logger.info('Password reset code sent | email={}', email)
         except Exception as e:
-            logger.error('Failed to send reset code email | email={} error={}', email, e)
+            # logger.exception captura el traceback completo para diagnóstico
+            logger.exception(f'Failed to send reset code email to {email}: {e}')
             raise RuntimeError('Error al enviar el correo electrónico. Inténtalo de nuevo.')
 
         return {
             'message': 'Código de verificación enviado a tu correo electrónico.',
             'expires_in_minutes': 15
         }
+
+    @staticmethod
+    @transaction.atomic
+    def _create_reset_code(user) -> str:
+        """
+        Invalida códigos anteriores y crea un nuevo código de 6 dígitos en BD.
+        Separado de request_password_reset para que @transaction.atomic sólo
+        cubra operaciones de base de datos, sin incluir el envío del correo.
+
+        Returns:
+            str: el código generado
+        """
+        PasswordResetCode.objects.filter(
+            user=user,
+            is_used=False
+        ).update(is_used=True)
+
+        code = ''.join(secrets.choice(string.digits) for _ in range(6))
+        expires_at = timezone.now() + timedelta(minutes=15)
+        PasswordResetCode.objects.create(
+            user=user,
+            code=code,
+            expires_at=expires_at
+        )
+        return code
 
     @staticmethod
     def verify_reset_code(email: str, code: str) -> dict:

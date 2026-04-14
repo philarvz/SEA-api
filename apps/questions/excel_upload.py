@@ -1,18 +1,10 @@
-"""
-Helpers for bulk question import from .xlsx (multiple header conventions).
-Supports English headers (question_text, subject_id, options, …) and Spanish
-layouts (enunciado, materia, opcion_1..4, dificultad MEDIA/ALTA, bloom RECORDAR, …).
-"""
-
 from __future__ import annotations
-
+from io import BytesIO
 import unicodedata
+from openpyxl import Workbook
 from typing import Any
-
 from django.contrib.auth.base_user import AbstractBaseUser
-
 from apps.academic.models import Subject
-
 from .models import Question
 from .subject_access import allowed_subject_ids_for_question_user
 
@@ -25,13 +17,10 @@ _VALID_BLOOM = frozenset({
     'create',
 })
 
-
 def _strip_accents(s: str) -> str:
     s = unicodedata.normalize('NFKD', str(s).strip().lower())
     return ''.join(c for c in s if not unicodedata.combining(c))
 
-
-# Canonical internal names -> accepted column headers (lowercase, no accents required in file)
 CANONICAL_HEADERS: dict[str, tuple[str, ...]] = {
     'question_text': (
         'question_text',
@@ -54,6 +43,7 @@ CANONICAL_HEADERS: dict[str, tuple[str, ...]] = {
     'bloom_level': ('bloom_level', 'bloom', 'nivel_bloom', 'taxonomia', 'taxonomía'),
     'image_url': ('image_url', 'imagen_url', 'url_imagen', 'url_imagen_opcional'),
     'test_code': ('test_code', 'codigo_prueba', 'código_prueba', 'codigo_test', 'pruebas'),
+    'language': ('language', 'lenguaje', 'idioma'),
     'points': ('points', 'puntos', 'puntaje'),
 }
 
@@ -108,11 +98,6 @@ def normalize_header_row(row: tuple[Any, ...] | list[Any]) -> list[str]:
 
 
 def build_column_maps(headers_normalized: list[str]) -> tuple[dict[str, int], dict[str, int]]:
-    """
-    Returns:
-      - col_by_canon: canonical field -> column index
-      - col_by_header: every header -> index (for opcion_1 etc.)
-    """
     col_by_header: dict[str, int] = {}
     for i, h in enumerate(headers_normalized):
         if h and h not in col_by_header:
@@ -131,16 +116,30 @@ def build_column_maps(headers_normalized: list[str]) -> tuple[dict[str, int], di
 
 def validate_required_columns(col_by_canon: dict[str, int]) -> str | None:
     if 'question_text' not in col_by_canon:
-        return 'Falta una columna de enunciado (question_text / enunciado / pregunta).'
+        return 'Falta una columna de enunciado.'
     if 'type' not in col_by_canon:
-        return 'Falta la columna de tipo (type / tipo).'
+        return 'Falta la columna de tipo.'
     if 'subject_id' not in col_by_canon and 'subject_name' not in col_by_canon:
-        return 'Falta materia: use subject_id / id_materia o materia (nombre exacto).'
+        return 'Falta la columna de materia.'
     return None
 
 
+def build_error_rows_workbook(headers: list[Any], rows_with_errors: list[dict[str, Any]]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Errores'
+    ws.append([*(str(h) if h is not None else '' for h in headers), 'error'])
+    for item in rows_with_errors:
+        raw_row = item.get('row_data') or []
+        row_values = [str(v) if v is not None else '' for v in raw_row]
+        row_values.append(str(item.get('error') or 'Error de validación'))
+        ws.append(row_values)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def worksheet_for_question_import(workbook) -> Any:
-    """Prioriza Plantilla (ES); admite Plantilla_ES por compatibilidad con archivos antiguos."""
     titles = getattr(workbook, 'sheetnames', None) or []
     for name in ('Plantilla', 'Plantilla_ES'):
         if name in titles:
@@ -184,7 +183,6 @@ def parse_bloom(raw: Any) -> str:
 
 
 def parse_question_type(raw: Any) -> str:
-    """Etiquetas en español de la plantilla y códigos en inglés (MULTIPLE_CHOICE, …)."""
     if raw is None:
         return 'MULTIPLE_CHOICE'
     s0 = str(raw).strip()
@@ -225,7 +223,6 @@ def collect_options_from_row(
     row: tuple[Any, ...] | list[Any],
     col_by_header: dict[str, int],
 ) -> list[str]:
-    """opcion_1..4 / opción_1 / option_1 …"""
     opts: list[str] = []
     for i in range(1, 5):
         idx = None
@@ -258,7 +255,7 @@ def resolve_subject_id(
         sid = int(raw)
         sub = Subject.objects.filter(pk=sid, status=True).first()
         if not sub:
-            raise ValueError('El id_subject no existe o la materia está inactiva.')
+            raise ValueError('La materia no existe o está inactiva.')
         if allowed is not None and sub.pk not in allowed:
             raise ValueError(
                 'No tiene permiso para esa materia. Elija una materia de la hoja Materias de su plantilla.'
