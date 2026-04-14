@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from django.db import IntegrityError
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
@@ -461,10 +462,10 @@ class GroupListCreateView(APIView):
                 'Group created | id={} letter={} academic_level={}',
                 group.pk, group.group_letter, group.academic_level,
             )
-        except IntegrityError as exc:
-            logger.error('IntegrityError al registrar grupo | detail={}', exc)
+        except (IntegrityError, DjangoValidationError) as exc:
+            logger.error('Error al registrar grupo | detail={}', exc)
             return error_response(
-                'Ya existe un grupo con esa letra para la generación indicada.',
+                'Ya existe un grupo con esa letra para la generación indicada. Por favor elige una letra diferente.',
                 status_code=status.HTTP_409_CONFLICT,
             )
 
@@ -522,10 +523,10 @@ class GroupDetailView(APIView):
             group.status = data['status']
             group.save(update_fields=['group_letter', 'academic_level', 'status'])
             logger.info('Grupo actualizado | id={}', pk)
-        except IntegrityError as exc:
-            logger.error('IntegrityError al actualizar grupo | id={} detail={}', pk, exc)
+        except (IntegrityError, DjangoValidationError) as exc:
+            logger.error('Error al actualizar grupo | id={} detail={}', pk, exc)
             return error_response(
-                'Ya existe un grupo con esa letra para la generación indicada.',
+                'Ya existe un grupo con esa letra para la generación indicada. Por favor elige una letra diferente.',
                 status_code=status.HTTP_409_CONFLICT,
             )
         return success_response(GroupSerializer(group).data, 'Grupo actualizado exitosamente.')

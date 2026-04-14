@@ -279,7 +279,7 @@ class PasswordRecoveryService:
             user = User.objects.get(email__iexact=email, is_active=True)
         except User.DoesNotExist:
             # Por seguridad, no revelar si el email existe o no
-            logger.warning(f'Password reset requested for non-existent email: {email}')
+            logger.warning('Password reset requested for non-existent email | email={}', email)
             return {'message': 'Si el correo existe, recibirás un código de verificación.'}
 
         # Guardar el código en BD dentro de su propia transacción atómica.
@@ -290,7 +290,7 @@ class PasswordRecoveryService:
         # Enviar email FUERA de la transacción (el código ya está persistido)
         try:
             PasswordRecoveryService._send_reset_code_email(user, code)
-            logger.info(f'Password reset code sent to {email}')
+            logger.info('Password reset code sent | email={}', email)
         except Exception as e:
             # logger.exception captura el traceback completo para diagnóstico
             logger.exception(f'Failed to send reset code email to {email}: {e}')
@@ -355,7 +355,7 @@ class PasswordRecoveryService:
         if not reset_code.is_valid():
             raise ValueError('El código ha expirado. Solicita uno nuevo.')
 
-        logger.info(f'Reset code verified for {email}')
+        logger.info('Reset code verified | email={}', email)
         
         return {
             'valid': True,
@@ -401,7 +401,7 @@ class PasswordRecoveryService:
         reset_code.is_used = True
         reset_code.save()
 
-        logger.info(f'Password reset successfully for {email}')
+        logger.info('Password reset successfully | email={}', email)
 
         return {
             'message': 'Contraseña restablecida exitosamente.'
