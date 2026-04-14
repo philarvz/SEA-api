@@ -96,6 +96,10 @@ def _validate_upload_file(up):
         return 'Debe adjuntar un archivo .xlsx en el campo "file".'
     if not up.name.lower().endswith('.xlsx'):
         return 'Solo se aceptan archivos .xlsx.'
+    # Limit file size to 10 MB to prevent zip-bomb / DoS
+    max_size = 10 * 1024 * 1024
+    if up.size > max_size:
+        return 'El archivo excede el tamaño máximo permitido (10 MB).'
     return None
 
 

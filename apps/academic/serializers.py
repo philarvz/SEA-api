@@ -9,6 +9,7 @@ from drf_spectacular.utils import extend_schema_field
 from .models import Generation, Period, Group, Subject, Unit, GroupTeacherAssignment
 from .services import PeriodService
 from apps.users.models import StudentProfile
+from utils.sanitizers import contains_html
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +30,8 @@ class GenerationSerializer(serializers.ModelSerializer):
     def validate_total_levels(self, value):
         if value < 1:
             raise serializers.ValidationError('El número total de niveles debe ser mayor a 0.')
+        if value > 11:
+            raise serializers.ValidationError('El número total de niveles no puede exceder 11.')
         return value
 
 
@@ -69,7 +72,12 @@ class GroupCreateSerializer(serializers.Serializer):
         return value
 
     def validate_group_letter(self, value):
-        return value.strip().upper()
+        value = (value or '').strip().upper()
+        if contains_html(value):
+            raise serializers.ValidationError('La letra de grupo no debe contener HTML.')
+        if not value or len(value) > 5:
+            raise serializers.ValidationError('La letra de grupo no es válida.')
+        return value
 
     def validate(self, attrs):
         academic_level = attrs.get('academic_level')
@@ -88,7 +96,12 @@ class GroupUpdateSerializer(serializers.Serializer):
     status = serializers.BooleanField(required=True)
 
     def validate_group_letter(self, value):
-        return value.strip().upper()
+        value = (value or '').strip().upper()
+        if contains_html(value):
+            raise serializers.ValidationError('La letra de grupo no debe contener HTML.')
+        if not value or len(value) > 5:
+            raise serializers.ValidationError('La letra de grupo no es válida.')
+        return value
 
 
 class GroupSerializer(serializers.ModelSerializer):
@@ -170,7 +183,7 @@ class UnitSerializer(serializers.ModelSerializer):
 
 
 class SubjectSerializer(serializers.ModelSerializer):
-    number_of_units = serializers.IntegerField(min_value=0, write_only=True, required=False)
+    number_of_units = serializers.IntegerField(min_value=0, max_value=20, write_only=True, required=False)
     units = UnitSerializer(many=True, read_only=True)
 
     class Meta:
@@ -178,9 +191,21 @@ class SubjectSerializer(serializers.ModelSerializer):
         fields = ['id_subject', 'name', 'level_number', 'number_of_units', 'units', 'status']
         read_only_fields = ['id_subject']
 
+    def validate_name(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('El nombre de la materia es requerido.')
+        if contains_html(value):
+            raise serializers.ValidationError('El nombre no debe contener código HTML o scripts.')
+        if len(value) > 150:
+            raise serializers.ValidationError('El nombre no puede exceder 150 caracteres.')
+        return value
+
     def validate_level_number(self, value):
         if value < 1:
             raise serializers.ValidationError('El número de nivel debe ser mayor a 0.')
+        if value > 11:
+            raise serializers.ValidationError('El número de nivel no puede exceder 11.')
         return value
 
 

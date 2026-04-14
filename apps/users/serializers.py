@@ -7,6 +7,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema_field
 from apps.academic.services import PeriodService
+from utils.sanitizers import sanitize_name, contains_html
 
 User = get_user_model()
 
@@ -53,10 +54,20 @@ class RegisterUserSerializer(serializers.Serializer):
         return value
 
     def validate_first_name(self, value: str) -> str:
-        return value.strip()
+        value = sanitize_name(value)
+        if not value:
+            raise serializers.ValidationError('El nombre es requerido.')
+        if contains_html(value):
+            raise serializers.ValidationError('El nombre no debe contener HTML.')
+        return value
 
     def validate_last_name(self, value: str) -> str:
-        return value.strip()
+        value = sanitize_name(value)
+        if not value:
+            raise serializers.ValidationError('El apellido es requerido.')
+        if contains_html(value):
+            raise serializers.ValidationError('El apellido no debe contener HTML.')
+        return value
 
     # -----------------------------------------------------------------
     # Cross-field validations
@@ -138,10 +149,20 @@ class UpdateUserSerializer(serializers.Serializer):
         return value
 
     def validate_first_name(self, value: str) -> str:
-        return value.strip()
+        value = sanitize_name(value)
+        if not value:
+            raise serializers.ValidationError('El nombre es requerido.')
+        if contains_html(value):
+            raise serializers.ValidationError('El nombre no debe contener HTML.')
+        return value
 
     def validate_last_name(self, value: str) -> str:
-        return value.strip()
+        value = sanitize_name(value)
+        if not value:
+            raise serializers.ValidationError('El apellido es requerido.')
+        if contains_html(value):
+            raise serializers.ValidationError('El apellido no debe contener HTML.')
+        return value
 
     # -----------------------------------------------------------------
     # Cross-field validations
@@ -365,15 +386,12 @@ class UserListSerializer(serializers.ModelSerializer):
 
 class RequestPasswordResetSerializer(serializers.Serializer):
     """Serializer para solicitar código de recuperación de contraseña"""
-    email = serializers.EmailField(required=True)
+    email = serializers.EmailField(required=True, max_length=254)
 
     def validate_email(self, value: str) -> str:
-        value = value.lower().strip()
-        if not User.objects.filter(email__iexact=value, is_active=True).exists():
-            raise serializers.ValidationError(
-                'No existe una cuenta activa asociada a este correo electrónico.'
-            )
-        return value
+        # Only normalize — existence check is deferred to the service layer
+        # to avoid leaking whether an account exists (CWE-204).
+        return value.lower().strip()
 
 
 class VerifyResetCodeSerializer(serializers.Serializer):

@@ -278,7 +278,7 @@ class PasswordRecoveryService:
             user = User.objects.get(email__iexact=email, is_active=True)
         except User.DoesNotExist:
             # Por seguridad, no revelar si el email existe o no
-            logger.warning(f'Password reset requested for non-existent email: {email}')
+            logger.warning('Password reset requested for non-existent email | email={}', email)
             return {'message': 'Si el correo existe, recibirás un código de verificación.'}
 
         # Invalidar códigos anteriores no usados para este usuario
@@ -303,9 +303,9 @@ class PasswordRecoveryService:
         # Enviar email con el código
         try:
             PasswordRecoveryService._send_reset_code_email(user, code)
-            logger.info(f'Password reset code sent to {email}')
+            logger.info('Password reset code sent | email={}', email)
         except Exception as e:
-            logger.error(f'Failed to send reset code email to {email}: {e}')
+            logger.error('Failed to send reset code email | email={} error={}', email, e)
             raise RuntimeError('Error al enviar el correo electrónico. Inténtalo de nuevo.')
 
         return {
@@ -342,7 +342,7 @@ class PasswordRecoveryService:
         if not reset_code.is_valid():
             raise ValueError('El código ha expirado. Solicita uno nuevo.')
 
-        logger.info(f'Reset code verified for {email}')
+        logger.info('Reset code verified | email={}', email)
         
         return {
             'valid': True,
@@ -388,7 +388,7 @@ class PasswordRecoveryService:
         reset_code.is_used = True
         reset_code.save()
 
-        logger.info(f'Password reset successfully for {email}')
+        logger.info('Password reset successfully | email={}', email)
 
         return {
             'message': 'Contraseña restablecida exitosamente.'

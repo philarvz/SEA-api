@@ -15,8 +15,8 @@ class LoginSerializer(serializers.Serializer):
     Serializer for login requests.
     Validates email and user credentials.
     """
-    email = serializers.EmailField(required=True)
-    password = serializers.CharField(required=True, write_only=True)
+    email = serializers.EmailField(required=True, max_length=254)
+    password = serializers.CharField(required=True, write_only=True, max_length=128)
 
     def validate_email(self, value):
         """Normalize email to lowercase"""
@@ -28,7 +28,7 @@ class LoginSerializer(serializers.Serializer):
 
 class TokenRefreshRequestSerializer(serializers.Serializer):
     """Serializer for token refresh requests."""
-    refresh = serializers.CharField(required=True, help_text='JWT refresh token')
+    refresh = serializers.CharField(required=True, max_length=1024, help_text='JWT refresh token')
 
 
 class TokenRefreshResponseSerializer(serializers.Serializer):
@@ -85,7 +85,7 @@ class ChangePasswordSerializer(serializers.Serializer):
     - new_password: Nueva clave
     - confirm_password: Confirmación de la nueva clave
     """
-    encrypted_data = serializers.CharField(required=True, write_only=True)
+    encrypted_data = serializers.CharField(required=True, write_only=True, max_length=2048)
 
     def validate_encrypted_data(self, value):
         """Descifra y valida el payload"""
@@ -121,6 +121,10 @@ class ChangePasswordSerializer(serializers.Serializer):
         if not new_password:
             raise serializers.ValidationError({'new_password': MSG_NEW_CREDENTIAL_REQUIRED})
         
+        # Validar longitud máxima de la nueva clave
+        if len(new_password) > 128:
+            raise serializers.ValidationError({'new_password': 'La clave no puede exceder 128 caracteres.'})
+
         # Validar longitud mínima de la nueva clave
         if len(new_password) < 8:
             raise serializers.ValidationError({'new_password': MSG_CREDENTIAL_MIN_LENGTH})

@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from utils.sanitizers import MAX_CODE_LENGTH, MAX_STATEMENT_LENGTH
 from .models import StudentAnswer
 
 
@@ -82,8 +83,8 @@ class AnswerItemSerializer(serializers.Serializer):
         required=False,
         allow_empty=False,
     )
-    answer_text = serializers.CharField(required=False, allow_blank=False)
-    code_answer = serializers.CharField(required=False, allow_blank=False)
+    answer_text = serializers.CharField(required=False, allow_blank=False, max_length=MAX_STATEMENT_LENGTH)
+    code_answer = serializers.CharField(required=False, allow_blank=False, max_length=MAX_CODE_LENGTH)
 
     def validate(self, attrs):
         provided = [

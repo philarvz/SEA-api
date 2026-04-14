@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.throttling import AnonRateThrottle
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from loguru import logger
 
@@ -25,11 +26,17 @@ from utils.responses import success_response, error_response
 MSG_INCORRECT_CREDENTIAL = 'Credencial incorrecta.'
 
 
+class LoginThrottle(AnonRateThrottle):
+    """Specific throttle for login endpoint to prevent brute-force attacks."""
+    scope = 'login'
+
+
 class LoginView(APIView):
     """
     Authenticate user and return JWT tokens
     """
     permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
     
     @extend_schema(
         request=LoginSerializer,
