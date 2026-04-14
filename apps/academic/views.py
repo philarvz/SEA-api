@@ -965,6 +965,117 @@ class TeacherMyGroupsView(APIView):
 
 
 # ---------------------------------------------------------------------------
+# Teacher: groups by subject  (TC-002)
+# ---------------------------------------------------------------------------
+
+class TeacherSubjectsWithGroupsView(APIView):
+    """
+    GET /api/academic/subjects/my-subjects-with-groups/
+    Returns a plain list of subject IDs for which the authenticated teacher
+    has at least one GroupTeacherAssignment (i.e. is assigned to at least one group).
+    Admin: returns all subject IDs that appear in any assignment.
+    Used by the frontend to determine which subject cards should show
+    a "Ver grupos" button vs "Sin grupos asignados".
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='IDs de materias del docente que tienen grupos asignados',
+        tags=['Materias'],
+        responses={200: OpenApiResponse(description='Lista de IDs de materias con grupos')},
+    )
+    def get(self, request):
+        role = getattr(request.user, 'role', None)
+        if role is None and request.auth is not None:
+            role = request.auth.get('role')
+
+        if role == 'admin':
+            subject_ids = list(
+                GroupTeacherAssignment.objects
+                .values_list('subject_id', flat=True)
+                .distinct()
+            )
+            logger.info('Admin: subjects with group assignments | count={}', len(subject_ids))
+            return success_response(subject_ids)
+
+        try:
+            profile = TeacherProfile.objects.get(user_id=request.user.pk)
+        except TeacherProfile.DoesNotExist:
+            logger.info('TeacherSubjectsWithGroups: no profile | user={}', request.user.pk)
+            return success_response([])
+
+        subject_ids = list(
+            GroupTeacherAssignment.objects
+            .filter(teacher=profile)
+            .values_list('subject_id', flat=True)
+            .distinct()
+        )
+        logger.info('Teacher subjects with groups | user={} count={}', request.user.pk, len(subject_ids))
+        return success_response(subject_ids)
+
+
+class SubjectTeacherGroupsView(APIView):
+    """
+    GET /api/academic/subjects/<pk>/my-groups/
+    Returns groups where the authenticated teacher has a GroupTeacherAssignment
+    for the given subject (i.e. the groups where they teach that subject).
+    Admin: returns all active groups with an assignment for that subject.
+    Each group includes students_count so the card can display it directly.
+    Response: { results: [ ...groups... ] }
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Grupos del docente para una materia concreta',
+        tags=['Materias'],
+        responses={200: AssignableGroupSerializer(many=True)},
+    )
+    def get(self, request, pk):
+        role = getattr(request.user, 'role', None)
+        if role is None and request.auth is not None:
+            role = request.auth.get('role')
+
+        try:
+            subject = Subject.objects.get(pk=pk)
+        except Subject.DoesNotExist:
+            return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if role == 'admin':
+            group_ids = (
+                GroupTeacherAssignment.objects
+                .filter(subject=subject)
+                .values_list('group_id', flat=True)
+                .distinct()
+            )
+        else:
+            try:
+                profile = TeacherProfile.objects.get(user_id=request.user.pk)
+            except TeacherProfile.DoesNotExist:
+                return success_response({'results': []})
+
+            group_ids = (
+                GroupTeacherAssignment.objects
+                .filter(teacher=profile, subject=subject)
+                .values_list('group_id', flat=True)
+                .distinct()
+            )
+
+        queryset = (
+            Group.objects
+            .select_related('id_generation')
+            .annotate(students_count=Count('students'))
+            .filter(pk__in=group_ids, status=True)
+            .order_by('academic_level', 'group_letter')
+        )
+        serializer = AssignableGroupSerializer(queryset, many=True)
+        logger.info(
+            'Subject teacher groups | subject_id={} user={} count={}',
+            pk, request.user.pk, len(serializer.data),
+        )
+        return success_response({'results': serializer.data})
+
+
+# ---------------------------------------------------------------------------
 # Subject views  (MAT-001 → MAT-003)
 # ---------------------------------------------------------------------------
 

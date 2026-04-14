@@ -142,67 +142,63 @@ class QuestionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('El enunciado es obligatorio.')
         return value
 
+    def _resolve_options_input(self, instance, attrs):
+        """Return the effective list of answer options for type-rule validation."""
+        if self.partial and instance is not None:
+            if 'answer_options' not in self.initial_data and 'answers' not in self.initial_data:
+                return list(instance.answers.all())
+        options = attrs.get('answers')
+        return options if options is not None else []
+
+    def _resolve_code_input(self, instance, attrs):
+        """Return the effective code_question payload dict for type-rule validation."""
+        code_in = attrs.get('code_question')
+        if self.partial and instance is not None and 'code_question' not in self.initial_data:
+            cq = CodeQuestion.objects.filter(question=instance).first()
+            return {'language': cq.language, 'test_cases': cq.test_cases} if cq else None
+        if 'code_question' in self.initial_data:
+            raw_cq = self.initial_data.get('code_question')
+            if raw_cq in (None, {}):
+                return None
+            if isinstance(raw_cq, dict):
+                ser = CodeQuestionPayloadSerializer(data=raw_cq)
+                ser.is_valid(raise_exception=True)
+                return ser.validated_data
+        return code_in
+
     def validate(self, attrs):
         instance = self.instance
         qtype = attrs.get('question_type')
         if qtype is None and instance is not None:
             qtype = instance.question_type
-
-        if self.partial and instance is not None:
-            if 'answer_options' not in self.initial_data and 'answers' not in self.initial_data:
-                options = list(instance.answers.all())
-            else:
-                options = attrs.get('answers')
-        else:
-            options = attrs.get('answers')
-
-        if options is None:
-            options = []
-
-        code_in = attrs.get('code_question')
-        if self.partial and instance is not None and 'code_question' not in self.initial_data:
-            cq = CodeQuestion.objects.filter(question=instance).first()
-            code_in = {'language': cq.language, 'test_cases': cq.test_cases} if cq else None
-        elif 'code_question' in self.initial_data:
-            raw_cq = self.initial_data.get('code_question')
-            if raw_cq in (None, {}):
-                code_in = None
-            elif isinstance(raw_cq, dict):
-                ser = CodeQuestionPayloadSerializer(data=raw_cq)
-                ser.is_valid(raise_exception=True)
-                code_in = ser.validated_data
-
+        options = self._resolve_options_input(instance, attrs)
+        code_in = self._resolve_code_input(instance, attrs)
         self._validate_type_rules(qtype, options, code_in)
         return attrs
 
-    def _validate_type_rules(self, qtype, options, code_in):
-        if not qtype:
-            return
-
+    def _count_correct_answers(self, options):
+        """Count correct answers regardless of whether options are model instances or dicts."""
+        if isinstance(options, list) and options and isinstance(options[0], Answer):
+            return sum(1 for o in options if o.is_correct)
         if isinstance(options, list):
-            n = len(options)
-        else:
-            n = options.count()
+            return sum(1 for o in options if o.get('is_correct'))
+        return sum(1 for o in options if o.is_correct)
 
-        if qtype == 'OPEN':
-            if n > 0:
-                raise serializers.ValidationError({
-                    'answer_options': 'Las preguntas abiertas no deben tener opciones.',
-                })
-            return
+    def _validate_code_question(self, n, code_in):
+        """Raise ValidationError if a CODE question has options or is missing test_cases."""
+        if n > 0:
+            raise serializers.ValidationError({
+                'answer_options': 'Las preguntas de código no deben tener opciones.',
+            })
+        tests = (code_in or {}).get('test_cases') if isinstance(code_in, dict) else None
+        if not tests:
+            raise serializers.ValidationError({
+                'code_question': 'Las preguntas de tipo código requieren test_cases.',
+            })
 
-        if qtype == 'CODE':
-            if n > 0:
-                raise serializers.ValidationError({
-                    'answer_options': 'Las preguntas de código no deben tener opciones.',
-                })
-            tests = (code_in or {}).get('test_cases') if isinstance(code_in, dict) else None
-            if not tests:
-                raise serializers.ValidationError({
-                    'code_question': 'Las preguntas de tipo código requieren test_cases.',
-                })
-            return
-
+    def _validate_choice_counts(self, qtype, options):
+        """Validate option count and correct-answer count for choice question types."""
+        n = len(options) if isinstance(options, list) else options.count()
         if n < 2:
             raise serializers.ValidationError({
                 'answer_options': 'Se requieren entre 2 y 4 opciones para preguntas de opción múltiple.',
@@ -211,14 +207,7 @@ class QuestionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'answer_options': 'Máximo 4 opciones permitidas.',
             })
-
-        if isinstance(options, list) and options and isinstance(options[0], Answer):
-            correct_count = sum(1 for o in options if o.is_correct)
-        elif isinstance(options, list):
-            correct_count = sum(1 for o in options if o.get('is_correct'))
-        else:
-            correct_count = sum(1 for o in options if o.is_correct)
-
+        correct_count = self._count_correct_answers(options)
         if qtype == 'MULTIPLE_CHOICE' and correct_count != 1:
             raise serializers.ValidationError({
                 'answer_options': 'Debe haber exactamente una respuesta correcta.',
@@ -227,6 +216,22 @@ class QuestionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'answer_options': 'Debe marcar al menos una respuesta correcta.',
             })
+
+    def _validate_type_rules(self, qtype, options, code_in):
+        """Dispatch type-specific validation rules."""
+        if not qtype:
+            return
+        n = len(options) if isinstance(options, list) else options.count()
+        if qtype == 'OPEN':
+            if n > 0:
+                raise serializers.ValidationError({
+                    'answer_options': 'Las preguntas abiertas no deben tener opciones.',
+                })
+            return
+        if qtype == 'CODE':
+            self._validate_code_question(n, code_in)
+            return
+        self._validate_choice_counts(qtype, options)
 
     def create(self, validated_data):
         answers_data = validated_data.pop('answers', [])

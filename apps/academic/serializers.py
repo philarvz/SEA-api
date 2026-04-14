@@ -269,22 +269,26 @@ class AvailableTeacherSerializer(serializers.Serializer):
 class AssignableGroupSerializer(serializers.ModelSerializer):
     """
     Lightweight read-only serializer for groups available to be selected
-    in the exam assignment dialog. Returns only display and identity fields;
-    no assignment details or student lists are included.
+    in the exam assignment dialog and for teacher's groups-by-subject view.
     """
     generation_year = serializers.IntegerField(source='id_generation.year', read_only=True)
     generation_total_levels = serializers.IntegerField(source='id_generation.total_levels', read_only=True)
     id_period = serializers.SerializerMethodField()
     period_info = serializers.SerializerMethodField()
     academic_level = serializers.SerializerMethodField()
+    students_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Group
         fields = [
             'id_group', 'id_generation', 'generation_year',
             'generation_total_levels', 'id_period', 'period_info',
-            'group_letter', 'academic_level', 'status',
+            'group_letter', 'academic_level', 'students_count', 'status',
         ]
+
+    @extend_schema_field(serializers.IntegerField())
+    def get_students_count(self, obj):
+        return getattr(obj, 'students_count', obj.students.count())
 
     def _get_current_period(self):
         if not hasattr(self, '_cached_current_period'):
