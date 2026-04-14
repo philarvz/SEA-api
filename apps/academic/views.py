@@ -32,6 +32,7 @@ from .serializers import (
     AvailableTeacherSerializer,
     TeacherSubjectSerializer,
     AssignableGroupSerializer,
+    AssignableGroupWithSubjectSerializer,
 )
 from .permissions import IsTeacherOrAdmin
 from .services import PeriodService
@@ -914,21 +915,76 @@ class TeacherMyGroupsView(APIView):
     @extend_schema(
         summary='Grupos accesibles para asignación de examen',
         tags=['Grupos'],
-        responses={200: AssignableGroupSerializer(many=True)},
+        parameters=[
+            OpenApiParameter(
+                name='exam_id',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description=(
+                    'ID del examen. Si se provée, filtra grupos por la materia del examen. '
+                    'El docente sólo puede consultar examen own. '
+                    'Admin ve todos los grupos activos del nivel de la materia.'
+                ),
+            )
+        ],
+        responses={200: AssignableGroupWithSubjectSerializer(many=True)},
     )
+    def _resolve_subject_from_exam(self, exam_id_raw, role, user):
+        """
+        Validates exam_id query param and returns (subject, error_response).
+        Returns (None, None) when exam_id is not provided.
+        Returns (None, Response) on validation or authorisation failure.
+        """
+        from apps.exams.models import Exam  # lazy import avoids circular dependency
+
+        if exam_id_raw is None:
+            return None, None
+        try:
+            exam_id_int = int(exam_id_raw)
+            if exam_id_int <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            return None, error_response('Parámetro exam_id inválido.')
+        try:
+            exam = Exam.objects.select_related('id_subject').get(pk=exam_id_int)
+        except Exam.DoesNotExist:
+            return None, error_response(
+                'Examen no encontrado.',
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        if role != 'admin' and exam.id_teacher_id != user.pk:
+            return None, error_response(
+                'No autorizado para consultar los grupos de este examen.',
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        return exam.id_subject, None
+
     def get(self, request):
         role = getattr(request.user, 'role', None)
         if role is None and request.auth is not None:
             role = request.auth.get('role')
 
+        subject, err = self._resolve_subject_from_exam(
+            request.query_params.get('exam_id'), role, request.user,
+        )
+        if err is not None:
+            return err
+
+        serializer_context = {'subject_name': subject.name if subject is not None else None}
+
         if role == 'admin':
-            queryset = (
+            base_qs = (
                 Group.objects
                 .select_related('id_generation')
                 .filter(status=True)
-                .order_by('academic_level', 'group_letter')
             )
-            serializer = AssignableGroupSerializer(queryset, many=True)
+            if subject is not None:
+                base_qs = base_qs.filter(academic_level=subject.level_number)
+            queryset = base_qs.order_by('academic_level', 'group_letter')
+            serializer = AssignableGroupWithSubjectSerializer(
+                queryset, many=True, context=serializer_context,
+            )
             logger.info(
                 'All groups listed for exam assignment selector | user={} count={}',
                 request.user.pk, len(serializer.data),
@@ -945,9 +1001,13 @@ class TeacherMyGroupsView(APIView):
             )
             return success_response([])
 
+        assignment_filter: dict = {'teacher': profile}
+        if subject is not None:
+            assignment_filter['subject'] = subject
+
         group_ids = (
             GroupTeacherAssignment.objects
-            .filter(teacher=profile)
+            .filter(**assignment_filter)
             .values_list('group_id', flat=True)
             .distinct()
         )
@@ -957,7 +1017,9 @@ class TeacherMyGroupsView(APIView):
             .filter(pk__in=group_ids, status=True)
             .order_by('academic_level', 'group_letter')
         )
-        serializer = AssignableGroupSerializer(queryset, many=True)
+        serializer = AssignableGroupWithSubjectSerializer(
+            queryset, many=True, context=serializer_context,
+        )
         logger.info(
             'Teacher my-groups listed for exam assignment selector | user={} count={}',
             request.user.pk, len(serializer.data),
