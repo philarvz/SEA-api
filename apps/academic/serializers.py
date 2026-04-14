@@ -305,3 +305,18 @@ class AssignableGroupSerializer(serializers.ModelSerializer):
 
     def get_academic_level(self, obj):
         return PeriodService.sync_group_academic_level(obj)
+
+
+class AssignableGroupWithSubjectSerializer(AssignableGroupSerializer):
+    """
+    Extends AssignableGroupSerializer with subject_name injected via context.
+    Used when the caller already knows the subject (e.g. exam-scoped group listing).
+    """
+    subject_name = serializers.SerializerMethodField()
+
+    class Meta(AssignableGroupSerializer.Meta):
+        fields = AssignableGroupSerializer.Meta.fields + ['subject_name']
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_subject_name(self, obj):
+        return self.context.get('subject_name')
