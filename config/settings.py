@@ -259,8 +259,8 @@ DEFAULT_FROM_EMAIL = config(
     'DEFAULT_FROM_EMAIL',
     default='SEA Sistema <20233tn070@utez.edu.mx>',
 )
-# Timeout de conexión SMTP en segundos
-EMAIL_TIMEOUT = 10
+# Timeout de conexión SMTP en segundos (30 s para tolerar la latencia de Render)
+EMAIL_TIMEOUT = 30
 
 
 # Spectacular (Swagger) Configuration
