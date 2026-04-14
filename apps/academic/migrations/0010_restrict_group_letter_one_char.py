@@ -3,6 +3,15 @@
 from django.db import migrations, models
 
 
+def truncate_group_letter(apps, schema_editor):
+    """Truncate existing group_letter values to 1 character before applying constraint."""
+    Group = apps.get_model('academic', 'Group')
+    for group in Group.objects.filter(group_letter__isnull=False):
+        if len(group.group_letter) > 1:
+            group.group_letter = group.group_letter[0]
+            group.save(update_fields=['group_letter'])
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,6 +19,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(truncate_group_letter, migrations.RunPython.noop),
         migrations.AlterField(
             model_name='group',
             name='group_letter',
