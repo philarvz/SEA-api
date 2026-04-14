@@ -5,6 +5,14 @@ Custom permission classes for the Academic module.
 from rest_framework.permissions import BasePermission
 
 
+def get_user_role(request):
+    """Extract the role claim from the authenticated user / JWT token."""
+    role = getattr(request.user, 'role', None)
+    if role is None and request.auth is not None:
+        role = request.auth.get('role')
+    return role
+
+
 class IsTeacherOrAdmin(BasePermission):
     """
     Grants access only to authenticated users with the 'teacher' or 'admin' role.
@@ -15,12 +23,19 @@ class IsTeacherOrAdmin(BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        # Role is embedded as a custom claim in the JWT token;
-        # simplejwt TokenUser delegates attribute access to the token payload.
-        role = getattr(request.user, 'role', None)
-        if role is None and request.auth is not None:
-            role = request.auth.get('role')
-        return role in ('teacher', 'admin')
+        return get_user_role(request) in ('teacher', 'admin')
+
+
+class IsAdmin(BasePermission):
+    """
+    Grants access only to authenticated users with the 'admin' role.
+    """
+    message = 'Acceso restringido a administradores.'
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        return get_user_role(request) == 'admin'
 
 
 class IsStudent(BasePermission):
@@ -33,7 +48,4 @@ class IsStudent(BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        role = getattr(request.user, 'role', None)
-        if role is None and request.auth is not None:
-            role = request.auth.get('role')
-        return role == 'student'
+        return get_user_role(request) == 'student'

@@ -297,6 +297,12 @@ class UserDetailView(APIView):
                 MSG_USER_NOT_FOUND,
                 status_code=status.HTTP_404_NOT_FOUND
             )
+
+        if not user.status:
+            return error_response(
+                'No se puede editar un registro desactivado.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
         
         serializer = UpdateUserSerializer(
             data=request.data,
