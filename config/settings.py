@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
+    'whitenoise.runserver_nostatic',
     'django.contrib.staticfiles',
     
     # Third party apps
@@ -41,6 +42,9 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_spectacular',
     
+    # Third party email
+    'anymail',
+
     # Local apps
     'apps.authentication',
     'apps.core',
@@ -58,6 +62,7 @@ AUTH_USER_MODEL = 'users.User'
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -136,6 +141,8 @@ USE_TZ = True
 
 
 STATIC_URL = 'static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -242,21 +249,21 @@ MOCK_PASSWORD = config('MOCK_PASSWORD', default='1234')
 
 
 # ------------------------------------------------------------------
-# E-mail Configuration (Gmail SMTP with App Password)
+# E-mail Configuration
+# Render bloquea los puertos SMTP 465/587 en el plan gratuito.
+# Se usa Brevo (HTTP API vía django-anymail) que opera sobre HTTPS (443).
 # ------------------------------------------------------------------
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_USE_SSL = False
-EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='20233tn070@utez.edu.mx')
-EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='oipe vgdd faaa jyoc')
+EMAIL_BACKEND = 'anymail.backends.brevo.EmailBackend'
+ANYMAIL = {
+    'BREVO_API_KEY': config('BREVO_API_KEY', default=''),
+    # Registra en logs el detalle de cada llamada a la API de Brevo.
+    # Útil para diagnosticar rechazos silenciosos de sender no verificado.
+    'DEBUG_API_REQUESTS': config('ANYMAIL_DEBUG', default=False, cast=bool),
+}
 DEFAULT_FROM_EMAIL = config(
     'DEFAULT_FROM_EMAIL',
-    default='SEA Sistema <20233tn070@utez.edu.mx>',
+    default='SEA Sistema <pili.higvaz16@gmail.com>',
 )
-# Timeout de conexión SMTP en segundos
-EMAIL_TIMEOUT = 10
 
 
 # Spectacular (Swagger) Configuration
