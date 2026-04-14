@@ -115,3 +115,15 @@ class ManualGradeSerializer(serializers.Serializer):
     student_answer_id = serializers.IntegerField(min_value=1)
     score = serializers.DecimalField(max_digits=6, decimal_places=2, min_value=Decimal('0'))
     is_correct = serializers.BooleanField()
+
+
+class ForfeitExamSerializer(serializers.Serializer):
+    """Used when a student abandons/exits a secure-mode exam; allows empty answers."""
+    exam_assignment_id = serializers.IntegerField(min_value=1)
+    answers = AnswerItemSerializer(many=True, allow_empty=True, required=False, default=list)
+
+    def validate_answers(self, value):
+        question_ids = [item['question_id'] for item in value]
+        if len(question_ids) != len(set(question_ids)):
+            raise serializers.ValidationError('No se permiten preguntas duplicadas en el envío.')
+        return value

@@ -23,8 +23,14 @@ class GenerationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id_generation']
 
     def validate_year(self, value):
-        if value < 1900 or value > 2200:
+        from django.utils import timezone
+        current_year = timezone.now().date().year
+        if value < 1900:
             raise serializers.ValidationError('El año de generación no es válido.')
+        if value > current_year:
+            raise serializers.ValidationError(
+                f'No se pueden registrar generaciones con año mayor al actual ({current_year}).'
+            )
         return value
 
     def validate_total_levels(self, value):
@@ -56,7 +62,7 @@ class PeriodSerializer(serializers.ModelSerializer):
 class GroupCreateSerializer(serializers.Serializer):
     """Input serializer for POST /groups/."""
     id_generation = serializers.IntegerField(required=True)
-    group_letter = serializers.CharField(max_length=5, required=True)
+    group_letter = serializers.CharField(max_length=1, required=True)
     academic_level = serializers.IntegerField(min_value=1, required=False)
     status = serializers.BooleanField(default=True)
 
@@ -75,23 +81,33 @@ class GroupCreateSerializer(serializers.Serializer):
         value = (value or '').strip().upper()
         if contains_html(value):
             raise serializers.ValidationError('La letra de grupo no debe contener HTML.')
-        if not value or len(value) > 5:
-            raise serializers.ValidationError('La letra de grupo no es válida.')
+        if len(value) != 1 or not value.isalpha():
+            raise serializers.ValidationError('La letra de grupo debe ser exactamente una letra (A-Z).')
         return value
 
     def validate(self, attrs):
         academic_level = attrs.get('academic_level')
         generation = self.context.get('_generation')
-        if generation and academic_level and academic_level > generation.total_levels:
-            raise serializers.ValidationError({
-                'academic_level': f'El nivel académico no puede exceder {generation.total_levels} (total de niveles de la generación).'
-            })
+        if generation and academic_level:
+            if academic_level > generation.total_levels:
+                raise serializers.ValidationError({
+                    'academic_level': f'El nivel académico no puede exceder {generation.total_levels} (total de niveles de la generación).'
+                })
+            from .services import PeriodService
+            expected_level = PeriodService.calculate_generation_academic_level(
+                generation_year=generation.year,
+                total_levels=generation.total_levels,
+            )
+            if academic_level != expected_level:
+                raise serializers.ValidationError({
+                    'academic_level': f'El nivel académico debe ser {expected_level} para la generación {generation.year} en el periodo actual.'
+                })
         return attrs
 
 
 class GroupUpdateSerializer(serializers.Serializer):
     """Input serializer for PUT /groups/{id}/ — generation is immutable."""
-    group_letter = serializers.CharField(max_length=5, required=True)
+    group_letter = serializers.CharField(max_length=1, required=True)
     academic_level = serializers.IntegerField(min_value=1, required=False)
     status = serializers.BooleanField(required=True)
 
@@ -99,8 +115,8 @@ class GroupUpdateSerializer(serializers.Serializer):
         value = (value or '').strip().upper()
         if contains_html(value):
             raise serializers.ValidationError('La letra de grupo no debe contener HTML.')
-        if not value or len(value) > 5:
-            raise serializers.ValidationError('La letra de grupo no es válida.')
+        if len(value) != 1 or not value.isalpha():
+            raise serializers.ValidationError('La letra de grupo debe ser exactamente una letra (A-Z).')
         return value
 
 
@@ -183,7 +199,7 @@ class UnitSerializer(serializers.ModelSerializer):
 
 
 class SubjectSerializer(serializers.ModelSerializer):
-    number_of_units = serializers.IntegerField(min_value=0, max_value=20, write_only=True, required=False)
+    number_of_units = serializers.IntegerField(min_value=0, max_value=9, write_only=True, required=False)
     units = UnitSerializer(many=True, read_only=True)
 
     class Meta:
@@ -206,6 +222,11 @@ class SubjectSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('El número de nivel debe ser mayor a 0.')
         if value > 11:
             raise serializers.ValidationError('El número de nivel no puede exceder 11.')
+        return value
+
+    def validate_number_of_units(self, value):
+        if value is not None and value > 9:
+            raise serializers.ValidationError('El número de unidades no puede exceder 9.')
         return value
 
 

@@ -145,8 +145,6 @@ class QuestionSerializer(serializers.ModelSerializer):
         value = (value or '').strip()
         if not value:
             raise serializers.ValidationError('El enunciado es obligatorio.')
-        if contains_html(value):
-            raise serializers.ValidationError('El enunciado no debe contener código HTML.')
         if len(value) > MAX_STATEMENT_LENGTH:
             raise serializers.ValidationError(f'El enunciado no puede exceder {MAX_STATEMENT_LENGTH} caracteres.')
         return value

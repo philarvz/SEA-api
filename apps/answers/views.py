@@ -14,7 +14,7 @@ from apps.questions.models import Answer, Question
 from utils.responses import error_response, success_response
 
 from .models import StudentAnswer
-from .serializers import ManualGradeSerializer, StudentAnswerSerializer, SubmitExamSerializer
+from .serializers import ForfeitExamSerializer, ManualGradeSerializer, StudentAnswerSerializer, SubmitExamSerializer
 from .services import GradingService
 
 
@@ -319,6 +319,116 @@ class ManualGradeAnswerView(APIView):
                 'assignment_summary': assignment_summary,
             },
             'Calificacion manual aplicada exitosamente.',
+        )
+
+
+class ForfeitExamView(APIView):
+    """
+    Force-closes a secure-mode exam when the student exits fullscreen.
+    Accepts any answers already filled in (can be empty list) and
+    grades them, then marks the assignment as completed regardless.
+    """
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    @extend_schema(
+        request=ForfeitExamSerializer,
+        responses={200: OpenApiResponse(description='Examen cerrado automáticamente')},
+        summary='Abandonar/cerrar examen de modo seguro',
+        tags=['Respuestas'],
+    )
+    def post(self, request):
+        serializer = ForfeitExamSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response('Datos inválidos.', serializer.errors)
+
+        payload = serializer.validated_data
+        now = timezone.now()
+
+        assignment = (
+            ExamAssignment.objects.select_related('exam')
+            .filter(pk=payload['exam_assignment_id'])
+            .first()
+        )
+        if not assignment:
+            return error_response('Asignación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+        if assignment.student_id != request.user.pk:
+            return error_response('No tiene permiso para esta asignación.', status_code=status.HTTP_403_FORBIDDEN)
+        if assignment.status == 'completed':
+            score_summary = {
+                'score': assignment.score,
+                'is_passed': assignment.is_passed,
+                'status': 'completed',
+            }
+            return success_response(
+                {'assignment_id': assignment.pk, 'status': 'completed', 'score_summary': score_summary, 'graded_answers': []},
+                'La asignación ya fue completada.',
+            )
+
+        answers_data = payload.get('answers', [])
+
+        with transaction.atomic():
+            if answers_data:
+                exam_question_ids = set(
+                    ExamQuestion.objects.filter(id_exam=assignment.exam)
+                    .values_list('id_question_id', flat=True)
+                )
+                submitted_ids = {item['question_id'] for item in answers_data}
+                valid_ids = submitted_ids & exam_question_ids
+                existing_ids = set(
+                    StudentAnswer.objects.filter(
+                        exam_assignment=assignment,
+                        question_id__in=valid_ids,
+                    ).values_list('question_id', flat=True)
+                )
+                new_ids = valid_ids - existing_ids
+
+                if new_ids:
+                    questions = {
+                        q.id_question: q
+                        for q in Question.objects.filter(id_question__in=new_ids).prefetch_related('answers')
+                    }
+                    options_map = {
+                        qid: {opt.id_answer: opt for opt in Answer.objects.filter(id_question_id=qid)}
+                        for qid in new_ids
+                    }
+                    for answer_data in answers_data:
+                        qid = answer_data['question_id']
+                        if qid not in new_ids:
+                            continue
+                        question = questions.get(qid)
+                        if not question:
+                            continue
+                        prepared, err = SubmitExamAnswersView._prepare_single_answer(answer_data, question, options_map)
+                        if err or prepared is None:
+                            continue
+                        sa = StudentAnswer(
+                            exam_assignment=assignment,
+                            question=question,
+                            answer_text=prepared['answer_text'],
+                            code_answer=prepared['code_answer'],
+                            selected_answer=prepared['selected_answer'],
+                        )
+                        sa.save()
+                        if question.question_type == 'MULTIPLE_SELECTION':
+                            sa.selected_answers.set(prepared['selected_answers'])
+                        GradingService.grade_student_answer(sa)
+
+            if assignment.attempt_date is None:
+                assignment.attempt_date = now
+            score_summary = GradingService.recalculate_assignment_score(assignment)
+
+        logger.info(
+            'Examen cerrado por abandono de modo seguro | assignment={} student={}',
+            assignment.pk, request.user.pk,
+        )
+        return success_response(
+            {
+                'assignment_id': assignment.pk,
+                'status': 'completed',
+                'score_summary': score_summary,
+                'graded_answers': [],
+            },
+            'Examen cerrado automáticamente.',
         )
 
 
