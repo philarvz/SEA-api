@@ -42,6 +42,9 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_spectacular',
     
+    # Third party email
+    'anymail',
+
     # Local apps
     'apps.authentication',
     'apps.core',
@@ -246,21 +249,18 @@ MOCK_PASSWORD = config('MOCK_PASSWORD', default='1234')
 
 
 # ------------------------------------------------------------------
-# E-mail Configuration (Gmail SMTP with App Password)
+# E-mail Configuration
+# Render bloquea los puertos SMTP 465/587 en el plan gratuito.
+# Se usa Brevo (HTTP API vía django-anymail) que opera sobre HTTPS (443).
 # ------------------------------------------------------------------
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_USE_SSL = False
-EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='20233tn070@utez.edu.mx')
-EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='oipe vgdd faaa jyoc')
+EMAIL_BACKEND = 'anymail.backends.brevo.EmailBackend'
+ANYMAIL = {
+    'BREVO_API_KEY': config('BREVO_API_KEY', default=''),
+}
 DEFAULT_FROM_EMAIL = config(
     'DEFAULT_FROM_EMAIL',
     default='SEA Sistema <20233tn070@utez.edu.mx>',
 )
-# Timeout de conexión SMTP en segundos (30 s para tolerar la latencia de Render)
-EMAIL_TIMEOUT = 30
 
 
 # Spectacular (Swagger) Configuration
