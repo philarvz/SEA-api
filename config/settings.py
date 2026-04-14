@@ -259,7 +259,7 @@ ANYMAIL = {
 }
 DEFAULT_FROM_EMAIL = config(
     'DEFAULT_FROM_EMAIL',
-    default='SEA Sistema <20233tn070@utez.edu.mx>',
+    default='SEA Sistema <pili.higvaz16@gmail.com>',
 )
 
 
