@@ -1,0 +1,78 @@
+############################################################
+# Render Blueprint — SEA API
+# Docs: https://render.com/docs/blueprint-spec
+#
+# ⚠️  Base de datos: este proyecto usa SUPABASE.
+#     NO se crea ninguna DB en Render.
+#     Configura las variables DB_* manualmente en el
+#     dashboard de Render con los datos de conexión de Supabase.
+############################################################
+
+services:
+  - type: web
+    name: sea-api
+    env: python
+    plan: free
+    region: oregon
+    rootDir: ""
+    buildCommand: "pip install -r requirements.txt && python manage.py collectstatic --noinput"
+    startCommand: "python manage.py migrate && gunicorn config.wsgi"
+    healthCheckPath: /
+
+    envVars:
+      # ── Django core ────────────────────────────────────────
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      # El valor ".onrender.com" cubre cualquier subdominio *.onrender.com
+      # El default "localhost,127.0.0.1" del settings.py nunca se usa en producción
+      # porque esta variable sobreescribe el default.
+      - key: ALLOWED_HOSTS
+        value: "sea-api.onrender.com"
+
+      # ── Encryption (AES-256) — configurar manualmente ──────
+      # Genera el valor con:
+      # python3 -c "import base64,os; print(base64.b64encode(os.urandom(32)).decode())"
+      - key: ENCRYPTION_KEY
+        sync: false
+
+      # ── Base de datos Supabase — configurar manualmente ────
+      # Obtén estos valores desde:
+      # Supabase Dashboard → Project Settings → Database → Connection info
+      - key: USE_DATABASE
+        value: "True"
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+
+      # ── JWT ────────────────────────────────────────────────
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: "HS256"
+      - key: JWT_ACCESS_TOKEN_LIFETIME
+        value: "60"
+      - key: JWT_REFRESH_TOKEN_LIFETIME
+        value: "1440"
+
+      # ── Email Gmail SMTP — configurar manualmente ──────────
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+
+      # ── APScheduler ────────────────────────────────────────
+      - key: APSCHEDULER_ENABLED
+        value: "True"
