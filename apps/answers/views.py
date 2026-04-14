@@ -28,6 +28,61 @@ def _get_role(request):
 _NO_PERMISSION_MSG = 'No tiene permiso para ver estas respuestas.'
 
 
+def _check_assignment_access(request, assignment):
+    """Return an error response if the user cannot access the assignment, else None."""
+    role = _get_role(request)
+    if role == 'student' and assignment.student_id != request.user.pk:
+        return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
+    if role == 'student' and timezone.now() <= assignment.available_to:
+        return error_response(
+            'Tus respuestas estarán disponibles cuando termine el periodo del examen.',
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    if role == 'teacher' and assignment.exam.id_teacher_id != request.user.pk:
+        return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
+    if role not in ('student', 'teacher', 'admin'):
+        return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
+    return None
+
+
+def _build_unanswered_record(assignment_pk, q):
+    """Build a virtual answer record for a question that was not answered."""
+    correct_answer_text = None
+    if q.question_type == 'MULTIPLE_CHOICE':
+        first_correct = q.answers.filter(is_correct=True).first()
+        correct_answer_text = first_correct.answer_text if first_correct else None
+
+    correct_answers_texts = (
+        list(q.answers.filter(is_correct=True).values_list('answer_text', flat=True))
+        if q.question_type == 'MULTIPLE_SELECTION' else []
+    )
+
+    return {
+        'id_student_answer': None,
+        'exam_assignment': assignment_pk,
+        'question': q.pk,
+        'question_type': q.question_type,
+        'question_statement': q.statement,
+        'question_image_url': getattr(q, 'image_url', None),
+        'question_points': q.points,
+        'question_difficulty': q.difficulty,
+        'question_bloom_level': q.bloom_level,
+        'selected_answer': None,
+        'selected_answer_text': None,
+        'selected_answers': [],
+        'selected_answers_texts': [],
+        'correct_answer_text': correct_answer_text,
+        'correct_answers_texts': correct_answers_texts,
+        'answer_text': '',
+        'code_answer': '',
+        'is_correct': None,
+        'score': None,
+        'evaluated_at': None,
+        'created_at': None,
+        'modified_at': None,
+    }
+
+
 class SubmitExamAnswersView(APIView):
     permission_classes = [IsAuthenticated, IsStudent]
 
@@ -481,18 +536,9 @@ class AssignmentAnswersView(APIView):
         if not assignment:
             return error_response('Asignacion no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
 
-        role = _get_role(request)
-        if role == 'student' and assignment.student_id != request.user.pk:
-            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
-        if role == 'student' and timezone.now() <= assignment.available_to:
-            return error_response(
-                'Tus respuestas estarán disponibles cuando termine el periodo del examen.',
-                status_code=status.HTTP_403_FORBIDDEN,
-            )
-        if role == 'teacher' and assignment.exam.id_teacher_id != request.user.pk:
-            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
-        if role not in ('student', 'teacher', 'admin'):
-            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
+        access_error = _check_assignment_access(request, assignment)
+        if access_error:
+            return access_error
 
         answers = (
             StudentAnswer.objects.filter(exam_assignment=assignment)
@@ -512,36 +558,7 @@ class AssignmentAnswersView(APIView):
         for eq in exam_questions:
             q = eq.id_question
             if q.pk not in answered_question_ids:
-                data.append({
-                    'id_student_answer': None,
-                    'exam_assignment': assignment.pk,
-                    'question': q.pk,
-                    'question_type': q.question_type,
-                    'question_statement': q.statement,
-                    'question_image_url': getattr(q, 'image_url', None),
-                    'question_points': q.points,
-                    'question_difficulty': q.difficulty,
-                    'question_bloom_level': q.bloom_level,
-                    'selected_answer': None,
-                    'selected_answer_text': None,
-                    'selected_answers': [],
-                    'selected_answers_texts': [],
-                    'correct_answer_text': (
-                        (q.answers.filter(is_correct=True).first() or type('', (), {'answer_text': None})).answer_text
-                        if q.question_type == 'MULTIPLE_CHOICE' else None
-                    ),
-                    'correct_answers_texts': (
-                        list(q.answers.filter(is_correct=True).values_list('answer_text', flat=True))
-                        if q.question_type == 'MULTIPLE_SELECTION' else []
-                    ),
-                    'answer_text': '',
-                    'code_answer': '',
-                    'is_correct': None,
-                    'score': None,
-                    'evaluated_at': None,
-                    'created_at': None,
-                    'modified_at': None,
-                })
+                data.append(_build_unanswered_record(assignment.pk, q))
 
         return success_response(
             {
