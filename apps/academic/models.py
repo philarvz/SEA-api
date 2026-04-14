@@ -14,10 +14,12 @@ class Generation(BaseAuditModel):
     Academic generation (cohorte): students who enter the same year and
     progress together through the programme.
     total_levels defines how many academic levels this generation will complete.
+    end_year is auto-calculated from year + ceil(total_levels / 3).
     """
     id_generation = models.AutoField(primary_key=True, db_column='id_generation')
     year = models.IntegerField(unique=True)
     total_levels = models.PositiveIntegerField(default=11, db_column='total_levels')
+    end_year = models.IntegerField(null=True, blank=True, db_column='end_year')
     status = models.BooleanField(default=True)
 
     class Meta:
@@ -27,6 +29,8 @@ class Generation(BaseAuditModel):
         ordering = ['-year']
 
     def __str__(self):
+        if self.end_year:
+            return f"Generation {self.year}-{self.end_year}"
         return f"Generation {self.year}"
 
 

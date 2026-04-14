@@ -19,8 +19,8 @@ from utils.sanitizers import contains_html
 class GenerationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Generation
-        fields = ['id_generation', 'year', 'total_levels', 'status']
-        read_only_fields = ['id_generation']
+        fields = ['id_generation', 'year', 'total_levels', 'end_year', 'status']
+        read_only_fields = ['id_generation', 'end_year']
 
     def validate_year(self, value):
         from django.utils import timezone
@@ -39,6 +39,18 @@ class GenerationSerializer(serializers.ModelSerializer):
         if value > 11:
             raise serializers.ValidationError('El número total de niveles no puede exceder 11.')
         return value
+
+    def create(self, validated_data):
+        import math
+        validated_data['end_year'] = validated_data['year'] + math.ceil(validated_data['total_levels'] / 3)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        import math
+        year = validated_data.get('year', instance.year)
+        total_levels = validated_data.get('total_levels', instance.total_levels)
+        validated_data['end_year'] = year + math.ceil(total_levels / 3)
+        return super().update(instance, validated_data)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +136,7 @@ class GroupSerializer(serializers.ModelSerializer):
     """Output serializer for read operations."""
     generation_year = serializers.IntegerField(source='id_generation.year', read_only=True)
     generation_total_levels = serializers.IntegerField(source='id_generation.total_levels', read_only=True)
+    generation_end_year = serializers.IntegerField(source='id_generation.end_year', read_only=True)
     id_period = serializers.SerializerMethodField()
     period_info = serializers.SerializerMethodField()
     academic_level = serializers.SerializerMethodField()
@@ -134,7 +147,7 @@ class GroupSerializer(serializers.ModelSerializer):
         model = Group
         fields = [
             'id_group', 'id_generation', 'generation_year',
-            'generation_total_levels',
+            'generation_total_levels', 'generation_end_year',
             'id_period', 'period_info',
             'group_letter', 'academic_level', 'students_count',
             'assignments', 'status',
@@ -319,6 +332,7 @@ class AssignableGroupSerializer(serializers.ModelSerializer):
     """
     generation_year = serializers.IntegerField(source='id_generation.year', read_only=True)
     generation_total_levels = serializers.IntegerField(source='id_generation.total_levels', read_only=True)
+    generation_end_year = serializers.IntegerField(source='id_generation.end_year', read_only=True)
     id_period = serializers.SerializerMethodField()
     period_info = serializers.SerializerMethodField()
     academic_level = serializers.SerializerMethodField()
@@ -328,7 +342,8 @@ class AssignableGroupSerializer(serializers.ModelSerializer):
         model = Group
         fields = [
             'id_group', 'id_generation', 'generation_year',
-            'generation_total_levels', 'id_period', 'period_info',
+            'generation_total_levels', 'generation_end_year',
+            'id_period', 'period_info',
             'group_letter', 'academic_level', 'students_count', 'status',
         ]
 
