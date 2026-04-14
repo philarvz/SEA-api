@@ -287,7 +287,7 @@ class GradingService:
         if result_queue.empty():
             return False, [{'test_case': 0, 'error': 'Error de ejecución del código.'}]
 
-        status_val, msg, exec_ns = result_queue.get_nowait()
+        status_val, msg, _ = result_queue.get_nowait()
         if status_val == 'error':
             return False, [{'test_case': 0, 'error': f'Error de ejecucion del codigo: {msg}'}]
 

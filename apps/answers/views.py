@@ -322,6 +322,58 @@ class ManualGradeAnswerView(APIView):
         )
 
 
+def _save_forfeit_answers(assignment, answers_data):
+    """Persist any partial answers from a forfeited exam. Skips invalid or already-saved ones."""
+    if not answers_data:
+        return
+
+    exam_question_ids = set(
+        ExamQuestion.objects.filter(id_exam=assignment.exam)
+        .values_list('id_question_id', flat=True)
+    )
+    valid_ids = {item['question_id'] for item in answers_data} & exam_question_ids
+    existing_ids = set(
+        StudentAnswer.objects.filter(
+            exam_assignment=assignment,
+            question_id__in=valid_ids,
+        ).values_list('question_id', flat=True)
+    )
+    new_ids = valid_ids - existing_ids
+
+    if not new_ids:
+        return
+
+    questions = {
+        q.id_question: q
+        for q in Question.objects.filter(id_question__in=new_ids).prefetch_related('answers')
+    }
+    options_map = {
+        qid: {opt.id_answer: opt for opt in Answer.objects.filter(id_question_id=qid)}
+        for qid in new_ids
+    }
+    for answer_data in answers_data:
+        qid = answer_data['question_id']
+        if qid not in new_ids:
+            continue
+        question = questions.get(qid)
+        if not question:
+            continue
+        prepared, err = SubmitExamAnswersView._prepare_single_answer(answer_data, question, options_map)
+        if err or prepared is None:
+            continue
+        sa = StudentAnswer(
+            exam_assignment=assignment,
+            question=question,
+            answer_text=prepared['answer_text'],
+            code_answer=prepared['code_answer'],
+            selected_answer=prepared['selected_answer'],
+        )
+        sa.save()
+        if question.question_type == 'MULTIPLE_SELECTION':
+            sa.selected_answers.set(prepared['selected_answers'])
+        GradingService.grade_student_answer(sa)
+
+
 class ForfeitExamView(APIView):
     """
     Force-closes a secure-mode exam when the student exits fullscreen.
@@ -367,52 +419,7 @@ class ForfeitExamView(APIView):
         answers_data = payload.get('answers', [])
 
         with transaction.atomic():
-            if answers_data:
-                exam_question_ids = set(
-                    ExamQuestion.objects.filter(id_exam=assignment.exam)
-                    .values_list('id_question_id', flat=True)
-                )
-                submitted_ids = {item['question_id'] for item in answers_data}
-                valid_ids = submitted_ids & exam_question_ids
-                existing_ids = set(
-                    StudentAnswer.objects.filter(
-                        exam_assignment=assignment,
-                        question_id__in=valid_ids,
-                    ).values_list('question_id', flat=True)
-                )
-                new_ids = valid_ids - existing_ids
-
-                if new_ids:
-                    questions = {
-                        q.id_question: q
-                        for q in Question.objects.filter(id_question__in=new_ids).prefetch_related('answers')
-                    }
-                    options_map = {
-                        qid: {opt.id_answer: opt for opt in Answer.objects.filter(id_question_id=qid)}
-                        for qid in new_ids
-                    }
-                    for answer_data in answers_data:
-                        qid = answer_data['question_id']
-                        if qid not in new_ids:
-                            continue
-                        question = questions.get(qid)
-                        if not question:
-                            continue
-                        prepared, err = SubmitExamAnswersView._prepare_single_answer(answer_data, question, options_map)
-                        if err or prepared is None:
-                            continue
-                        sa = StudentAnswer(
-                            exam_assignment=assignment,
-                            question=question,
-                            answer_text=prepared['answer_text'],
-                            code_answer=prepared['code_answer'],
-                            selected_answer=prepared['selected_answer'],
-                        )
-                        sa.save()
-                        if question.question_type == 'MULTIPLE_SELECTION':
-                            sa.selected_answers.set(prepared['selected_answers'])
-                        GradingService.grade_student_answer(sa)
-
+            _save_forfeit_answers(assignment, answers_data)
             if assignment.attempt_date is None:
                 assignment.attempt_date = now
             score_summary = GradingService.recalculate_assignment_score(assignment)

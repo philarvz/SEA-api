@@ -54,19 +54,19 @@ class RegisterUserSerializer(serializers.Serializer):
         return value
 
     def validate_first_name(self, value: str) -> str:
+        if contains_html(value):
+            raise serializers.ValidationError('El nombre no debe contener HTML.')
         value = sanitize_name(value)
         if not value:
             raise serializers.ValidationError('El nombre es requerido.')
-        if contains_html(value):
-            raise serializers.ValidationError('El nombre no debe contener HTML.')
         return value
 
     def validate_last_name(self, value: str) -> str:
+        if contains_html(value):
+            raise serializers.ValidationError('El apellido no debe contener HTML.')
         value = sanitize_name(value)
         if not value:
             raise serializers.ValidationError('El apellido es requerido.')
-        if contains_html(value):
-            raise serializers.ValidationError('El apellido no debe contener HTML.')
         return value
 
     # -----------------------------------------------------------------
@@ -149,19 +149,19 @@ class UpdateUserSerializer(serializers.Serializer):
         return value
 
     def validate_first_name(self, value: str) -> str:
+        if contains_html(value):
+            raise serializers.ValidationError('El nombre no debe contener HTML.')
         value = sanitize_name(value)
         if not value:
             raise serializers.ValidationError('El nombre es requerido.')
-        if contains_html(value):
-            raise serializers.ValidationError('El nombre no debe contener HTML.')
         return value
 
     def validate_last_name(self, value: str) -> str:
+        if contains_html(value):
+            raise serializers.ValidationError('El apellido no debe contener HTML.')
         value = sanitize_name(value)
         if not value:
             raise serializers.ValidationError('El apellido es requerido.')
-        if contains_html(value):
-            raise serializers.ValidationError('El apellido no debe contener HTML.')
         return value
 
     # -----------------------------------------------------------------

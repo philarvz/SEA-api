@@ -63,11 +63,11 @@ def sanitize_text(value: Optional[str], max_length: int = MAX_NAME_LENGTH) -> st
 def sanitize_name(value: Optional[str], max_length: int = MAX_NAME_LENGTH) -> str:
     """
     Sanitize a person name: only allows letters, spaces, hyphens, apostrophes, periods.
+    Does NOT strip HTML tags — callers must reject HTML before calling this.
     """
     if not value:
         return ''
     value = str(value).strip()
-    value = strip_html_tags(value)
     # Allow unicode letters, spaces, hyphens, apostrophes, periods
     value = re.sub(r"[^\w\s\-'.áéíóúÁÉÍÓÚñÑüÜ]", '', value, flags=re.UNICODE)
     return value[:max_length]
