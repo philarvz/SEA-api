@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from django.db import IntegrityError
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
@@ -31,6 +32,7 @@ from .serializers import (
     AvailableTeacherSerializer,
     TeacherSubjectSerializer,
     AssignableGroupSerializer,
+    AssignableGroupWithSubjectSerializer,
 )
 from .permissions import IsTeacherOrAdmin
 from .services import PeriodService
@@ -460,10 +462,10 @@ class GroupListCreateView(APIView):
                 'Group created | id={} letter={} academic_level={}',
                 group.pk, group.group_letter, group.academic_level,
             )
-        except IntegrityError as exc:
-            logger.error('IntegrityError al registrar grupo | detail={}', exc)
+        except (IntegrityError, DjangoValidationError) as exc:
+            logger.error('Error al registrar grupo | detail={}', exc)
             return error_response(
-                'Ya existe un grupo con esa letra para la generación indicada.',
+                'Ya existe un grupo con esa letra para la generación indicada. Por favor elige una letra diferente.',
                 status_code=status.HTTP_409_CONFLICT,
             )
 
@@ -521,10 +523,10 @@ class GroupDetailView(APIView):
             group.status = data['status']
             group.save(update_fields=['group_letter', 'academic_level', 'status'])
             logger.info('Grupo actualizado | id={}', pk)
-        except IntegrityError as exc:
-            logger.error('IntegrityError al actualizar grupo | id={} detail={}', pk, exc)
+        except (IntegrityError, DjangoValidationError) as exc:
+            logger.error('Error al actualizar grupo | id={} detail={}', pk, exc)
             return error_response(
-                'Ya existe un grupo con esa letra para la generación indicada.',
+                'Ya existe un grupo con esa letra para la generación indicada. Por favor elige una letra diferente.',
                 status_code=status.HTTP_409_CONFLICT,
             )
         return success_response(GroupSerializer(group).data, 'Grupo actualizado exitosamente.')
@@ -913,21 +915,76 @@ class TeacherMyGroupsView(APIView):
     @extend_schema(
         summary='Grupos accesibles para asignación de examen',
         tags=['Grupos'],
-        responses={200: AssignableGroupSerializer(many=True)},
+        parameters=[
+            OpenApiParameter(
+                name='exam_id',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description=(
+                    'ID del examen. Si se provée, filtra grupos por la materia del examen. '
+                    'El docente sólo puede consultar examen own. '
+                    'Admin ve todos los grupos activos del nivel de la materia.'
+                ),
+            )
+        ],
+        responses={200: AssignableGroupWithSubjectSerializer(many=True)},
     )
+    def _resolve_subject_from_exam(self, exam_id_raw, role, user):
+        """
+        Validates exam_id query param and returns (subject, error_response).
+        Returns (None, None) when exam_id is not provided.
+        Returns (None, Response) on validation or authorisation failure.
+        """
+        from apps.exams.models import Exam  # lazy import avoids circular dependency
+
+        if exam_id_raw is None:
+            return None, None
+        try:
+            exam_id_int = int(exam_id_raw)
+            if exam_id_int <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            return None, error_response('Parámetro exam_id inválido.')
+        try:
+            exam = Exam.objects.select_related('id_subject').get(pk=exam_id_int)
+        except Exam.DoesNotExist:
+            return None, error_response(
+                'Examen no encontrado.',
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        if role != 'admin' and exam.id_teacher_id != user.pk:
+            return None, error_response(
+                'No autorizado para consultar los grupos de este examen.',
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        return exam.id_subject, None
+
     def get(self, request):
         role = getattr(request.user, 'role', None)
         if role is None and request.auth is not None:
             role = request.auth.get('role')
 
+        subject, err = self._resolve_subject_from_exam(
+            request.query_params.get('exam_id'), role, request.user,
+        )
+        if err is not None:
+            return err
+
+        serializer_context = {'subject_name': subject.name if subject is not None else None}
+
         if role == 'admin':
-            queryset = (
+            base_qs = (
                 Group.objects
                 .select_related('id_generation')
                 .filter(status=True)
-                .order_by('academic_level', 'group_letter')
             )
-            serializer = AssignableGroupSerializer(queryset, many=True)
+            if subject is not None:
+                base_qs = base_qs.filter(academic_level=subject.level_number)
+            queryset = base_qs.order_by('academic_level', 'group_letter')
+            serializer = AssignableGroupWithSubjectSerializer(
+                queryset, many=True, context=serializer_context,
+            )
             logger.info(
                 'All groups listed for exam assignment selector | user={} count={}',
                 request.user.pk, len(serializer.data),
@@ -944,9 +1001,13 @@ class TeacherMyGroupsView(APIView):
             )
             return success_response([])
 
+        assignment_filter: dict = {'teacher': profile}
+        if subject is not None:
+            assignment_filter['subject'] = subject
+
         group_ids = (
             GroupTeacherAssignment.objects
-            .filter(teacher=profile)
+            .filter(**assignment_filter)
             .values_list('group_id', flat=True)
             .distinct()
         )
@@ -956,12 +1017,125 @@ class TeacherMyGroupsView(APIView):
             .filter(pk__in=group_ids, status=True)
             .order_by('academic_level', 'group_letter')
         )
-        serializer = AssignableGroupSerializer(queryset, many=True)
+        serializer = AssignableGroupWithSubjectSerializer(
+            queryset, many=True, context=serializer_context,
+        )
         logger.info(
             'Teacher my-groups listed for exam assignment selector | user={} count={}',
             request.user.pk, len(serializer.data),
         )
         return success_response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Teacher: groups by subject  (TC-002)
+# ---------------------------------------------------------------------------
+
+class TeacherSubjectsWithGroupsView(APIView):
+    """
+    GET /api/academic/subjects/my-subjects-with-groups/
+    Returns a plain list of subject IDs for which the authenticated teacher
+    has at least one GroupTeacherAssignment (i.e. is assigned to at least one group).
+    Admin: returns all subject IDs that appear in any assignment.
+    Used by the frontend to determine which subject cards should show
+    a "Ver grupos" button vs "Sin grupos asignados".
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='IDs de materias del docente que tienen grupos asignados',
+        tags=['Materias'],
+        responses={200: OpenApiResponse(description='Lista de IDs de materias con grupos')},
+    )
+    def get(self, request):
+        role = getattr(request.user, 'role', None)
+        if role is None and request.auth is not None:
+            role = request.auth.get('role')
+
+        if role == 'admin':
+            subject_ids = list(
+                GroupTeacherAssignment.objects
+                .values_list('subject_id', flat=True)
+                .distinct()
+            )
+            logger.info('Admin: subjects with group assignments | count={}', len(subject_ids))
+            return success_response(subject_ids)
+
+        try:
+            profile = TeacherProfile.objects.get(user_id=request.user.pk)
+        except TeacherProfile.DoesNotExist:
+            logger.info('TeacherSubjectsWithGroups: no profile | user={}', request.user.pk)
+            return success_response([])
+
+        subject_ids = list(
+            GroupTeacherAssignment.objects
+            .filter(teacher=profile)
+            .values_list('subject_id', flat=True)
+            .distinct()
+        )
+        logger.info('Teacher subjects with groups | user={} count={}', request.user.pk, len(subject_ids))
+        return success_response(subject_ids)
+
+
+class SubjectTeacherGroupsView(APIView):
+    """
+    GET /api/academic/subjects/<pk>/my-groups/
+    Returns groups where the authenticated teacher has a GroupTeacherAssignment
+    for the given subject (i.e. the groups where they teach that subject).
+    Admin: returns all active groups with an assignment for that subject.
+    Each group includes students_count so the card can display it directly.
+    Response: { results: [ ...groups... ] }
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        summary='Grupos del docente para una materia concreta',
+        tags=['Materias'],
+        responses={200: AssignableGroupSerializer(many=True)},
+    )
+    def get(self, request, pk):
+        role = getattr(request.user, 'role', None)
+        if role is None and request.auth is not None:
+            role = request.auth.get('role')
+
+        try:
+            subject = Subject.objects.get(pk=pk)
+        except Subject.DoesNotExist:
+            return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+
+        if role == 'admin':
+            group_ids = (
+                GroupTeacherAssignment.objects
+                .filter(subject=subject)
+                .values_list('group_id', flat=True)
+                .distinct()
+            )
+        else:
+            try:
+                profile = TeacherProfile.objects.get(user_id=request.user.pk)
+            except TeacherProfile.DoesNotExist:
+                return success_response({'results': []})
+
+            group_ids = (
+                GroupTeacherAssignment.objects
+                .filter(teacher=profile, subject=subject)
+                .values_list('group_id', flat=True)
+                .distinct()
+            )
+
+        queryset = (
+            Group.objects
+            .select_related('id_generation')
+            .annotate(students_count=Count('students'))
+            .filter(pk__in=group_ids, status=True)
+            .order_by('academic_level', 'group_letter')
+        )
+        serializer = AssignableGroupSerializer(queryset, many=True)
+        logger.info(
+            'Subject teacher groups | subject_id={} user={} count={}',
+            pk, request.user.pk, len(serializer.data),
+        )
+        return success_response({'results': serializer.data})
 
 
 # ---------------------------------------------------------------------------

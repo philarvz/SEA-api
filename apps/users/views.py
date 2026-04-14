@@ -2,11 +2,13 @@ from loguru import logger
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
+from rest_framework.throttling import AnonRateThrottle
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter
 from django.contrib.auth import get_user_model
 from django.db import models
 
 from .permissions import IsAdmin
+from utils.sanitizers import sanitize_text, MAX_SEARCH_LENGTH
 
 # Constantes para mensajes de error
 MSG_USER_NOT_FOUND = 'Usuario no encontrado.'
@@ -206,16 +208,18 @@ class UserListCreateView(APIView):
             except ValueError:
                 logger.warning('Invalid group parameter | group={}', group)
 
-        # Búsqueda por texto
+        # Búsqueda por texto (sanitized)
         search = request.query_params.get('search', None)
         if search:
-            queryset = queryset.filter(
-                models.Q(first_name__icontains=search) |
-                models.Q(last_name__icontains=search) |
-                models.Q(matricula__icontains=search) |
-                models.Q(email__icontains=search)
-            )
-            logger.debug('Searching users | query={}', search)
+            search = sanitize_text(search, max_length=MAX_SEARCH_LENGTH)
+            if search:
+                queryset = queryset.filter(
+                    models.Q(first_name__icontains=search) |
+                    models.Q(last_name__icontains=search) |
+                    models.Q(matricula__icontains=search) |
+                    models.Q(email__icontains=search)
+                )
+                logger.debug('Searching users | query={}', search)
 
         total_count = queryset.count()
         logger.info('Users queryset built | total_count={}', total_count)
@@ -385,6 +389,7 @@ class RequestPasswordResetView(APIView):
     """
     
     permission_classes = [AllowAny]
+    throttle_classes = [AnonRateThrottle]
 
     @extend_schema(
         summary='Solicitar código de recuperación de contraseña',
@@ -411,7 +416,7 @@ class RequestPasswordResetView(APIView):
             )
             return success_response(result, result['message'])
         except Exception as e:
-            logger.error(f'Error in password reset request: {e}')
+            logger.error('Error in password reset request | {}', e)
             return error_response(
                 str(e),
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -425,6 +430,7 @@ class VerifyResetCodeView(APIView):
     """
     
     permission_classes = [AllowAny]
+    throttle_classes = [AnonRateThrottle]
 
     @extend_schema(
         summary='Verificar código de recuperación',
@@ -452,7 +458,7 @@ class VerifyResetCodeView(APIView):
         except ValueError as e:
             return error_response(str(e), status_code=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            logger.error(f'Error verifying reset code: {e}')
+            logger.error('Error verifying reset code | {}', e)
             return error_response(
                 'Error al verificar el código.',
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -466,6 +472,7 @@ class ResetPasswordView(APIView):
     """
     
     permission_classes = [AllowAny]
+    throttle_classes = [AnonRateThrottle]
 
     @extend_schema(
         summary='Restablecer contraseña',
@@ -495,7 +502,7 @@ class ResetPasswordView(APIView):
         except ValueError as e:
             return error_response(str(e), status_code=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            logger.error(f'Error resetting password: {e}')
+            logger.error('Error resetting password | {}', e)
             return error_response(
                 'Error al restablecer la contraseña.',
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR

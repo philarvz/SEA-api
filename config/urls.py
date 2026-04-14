@@ -3,9 +3,11 @@ URL configuration for SEA-API project.
 """
 from django.contrib import admin
 from django.urls import path, include
+from .views import home
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
 urlpatterns = [
+    path('', home),
     path('admin/', admin.site.urls),
     
     # API endpoints
