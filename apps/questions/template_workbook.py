@@ -153,7 +153,6 @@ def build_questions_template_workbook(user) -> bytes:
         for col, v in enumerate(row_vals, 1):
             ws.cell(row=row_offset, column=col, value=v).alignment = wrap
 
-    # A=materia, B=tipo, D=dificultad, E=bloom
     _add_list_validation(ws, 'A', sub_name_range)
     _add_list_validation(ws, 'B', _inline_list_formula(TYPE_OPTIONS_ES))
     _add_list_validation(ws, 'D', _inline_list_formula(DIFF_OPTIONS_ES))

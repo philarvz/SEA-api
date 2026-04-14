@@ -90,6 +90,122 @@ def _paginated_payload(request, queryset, serializer_class):
     }
 
 
+def _validate_upload_file(up):
+    """Return an error message string if the uploaded file is invalid, else None."""
+    if not up:
+        return 'Debe adjuntar un archivo .xlsx en el campo "file".'
+    if not up.name.lower().endswith('.xlsx'):
+        return 'Solo se aceptan archivos .xlsx.'
+    return None
+
+
+def _load_excel_rows(up):
+    """Load the workbook and return (rows, error_message). One of them will be None."""
+    try:
+        wb = load_workbook(up, read_only=True, data_only=True)
+    except Exception as exc:
+        logger.warning('Excel upload parse error: {}', exc)
+        return None, 'No se pudo leer el archivo Excel.'
+    ws = worksheet_for_question_import(wb)
+    rows = list(ws.iter_rows(min_row=1, values_only=True))
+    if not rows:
+        return None, 'El archivo está vacío.'
+    return rows, None
+
+
+def _resolve_correct_indices(options, correct_raw):
+    """Return the set of 0-based indices that are marked as correct."""
+    correct_indices = set()
+    for part in correct_raw.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if part.isdigit():
+            correct_indices.add(int(part) - 1)
+        else:
+            for i, opt in enumerate(options):
+                if opt.lower() == part.lower():
+                    correct_indices.add(i)
+                    break
+    return correct_indices
+
+
+def _create_choice_answers(q, qtype, options, correct_raw):
+    """Validate options and create Answer objects for multiple-choice/selection questions."""
+    if len(options) < 2 or len(options) > 4:
+        raise ValueError('Se requieren entre 2 y 4 opciones (separadas por coma).')
+    correct_indices = _resolve_correct_indices(options, correct_raw)
+    if qtype == 'MULTIPLE_CHOICE' and len(correct_indices) != 1:
+        raise ValueError('Para MULTIPLE_CHOICE indique exactamente un índice correcto (1..n).')
+    if qtype == 'MULTIPLE_SELECTION' and len(correct_indices) < 1:
+        raise ValueError('Indique al menos una respuesta correcta.')
+    for i, opt in enumerate(options):
+        Answer.objects.create(
+            id_question=q,
+            answer_text=opt,
+            is_correct=i in correct_indices,
+        )
+
+
+def _create_code_question_obj(q, test_code):
+    """Create a CodeQuestion object for CODE-type questions."""
+    tests = [test_code] if test_code else []
+    if not tests:
+        raise ValueError('test_code es obligatorio para tipo CODE.')
+    CodeQuestion.objects.create(
+        question=q,
+        language='python',
+        test_cases=tests,
+    )
+
+
+def _create_type_specific_objects(q, qtype, options, correct_raw, test_code):
+    """Create question-type-specific child objects (answers or code question)."""
+    if qtype in ('MULTIPLE_CHOICE', 'MULTIPLE_SELECTION'):
+        _create_choice_answers(q, qtype, options, correct_raw)
+    elif qtype == 'CODE':
+        _create_code_question_obj(q, test_code)
+    elif qtype != 'OPEN':
+        raise ValueError(f'Tipo no soportado: {qtype}')
+    # OPEN questions require no additional database objects
+
+
+def _process_upload_row(row, col_by_canon, col_by_header, user):
+    """Parse one Excel row, create and return the Question with related objects."""
+    text = get_cell(row, col_by_canon.get('question_text'))
+    if not text:
+        raise ValueError('El enunciado (question_text / enunciado) está vacío.')
+
+    qtype = parse_question_type(get_cell(row, col_by_canon.get('type'), 'MULTIPLE_CHOICE'))
+    subject_id = resolve_subject_id(row, col_by_canon, user)
+
+    options = collect_options_from_row(row, col_by_header)
+    if not options and 'options' in col_by_canon:
+        options_raw = get_cell(row, col_by_canon['options'], '') or ''
+        options = [p.strip() for p in str(options_raw).split(',') if p.strip()]
+
+    correct_raw = str(get_cell(row, col_by_canon.get('correct_answers'), '') or '')
+    difficulty = parse_difficulty(get_cell(row, col_by_canon.get('difficulty'), 'medium'))
+    bloom = parse_bloom(get_cell(row, col_by_canon.get('bloom_level'), 'remember'))
+    image_url = get_cell(row, col_by_canon.get('image_url'), '') or ''
+    test_code = get_cell(row, col_by_canon.get('test_code'), '') or ''
+    points = parse_points(get_cell(row, col_by_canon.get('points'), 1))
+
+    with transaction.atomic():
+        q = Question.objects.create(
+            id_subject_id=subject_id,
+            statement=str(text),
+            question_type=qtype,
+            difficulty=difficulty,
+            bloom_level=bloom,
+            image_url=image_url or None,
+            points=points,
+            status=True,
+        )
+        _create_type_specific_objects(q, qtype, options, correct_raw, test_code)
+    return q
+
+
 _PATH_ID = OpenApiParameter('id', OpenApiTypes.INT, OpenApiParameter.PATH, description='ID de la pregunta')
 
 
@@ -182,21 +298,13 @@ class QuestionViewSet(ModelViewSet):
     @action(detail=False, methods=['post'], url_path='upload', parser_classes=[MultiPartParser])
     def upload(self, request):
         up = request.FILES.get('file')
-        if not up:
-            return error_response('Debe adjuntar un archivo .xlsx en el campo "file".')
-        if not up.name.lower().endswith('.xlsx'):
-            return error_response('Solo se aceptan archivos .xlsx.')
+        file_err = _validate_upload_file(up)
+        if file_err:
+            return error_response(file_err)
 
-        try:
-            wb = load_workbook(up, read_only=True, data_only=True)
-        except Exception as exc:
-            logger.warning('Excel upload parse error: {}', exc)
-            return error_response('No se pudo leer el archivo Excel.')
-
-        ws = worksheet_for_question_import(wb)
-        rows = list(ws.iter_rows(min_row=1, values_only=True))
-        if not rows:
-            return error_response('El archivo está vacío.')
+        rows, load_err = _load_excel_rows(up)
+        if load_err:
+            return error_response(load_err)
 
         headers_norm = normalize_header_row(rows[0])
         col_by_canon, col_by_header = build_column_maps(headers_norm)
@@ -212,84 +320,8 @@ class QuestionViewSet(ModelViewSet):
             if not row or all(v is None or str(v).strip() == '' for v in row):
                 continue
             total += 1
-
             try:
-                text = get_cell(row, col_by_canon.get('question_text'))
-                if not text:
-                    raise ValueError('El enunciado (question_text / enunciado) está vacío.')
-
-                qtype = parse_question_type(get_cell(row, col_by_canon.get('type'), 'MULTIPLE_CHOICE'))
-                subject_id = resolve_subject_id(row, col_by_canon, request.user)
-
-                options = collect_options_from_row(row, col_by_header)
-                if not options and 'options' in col_by_canon:
-                    options_raw = get_cell(row, col_by_canon['options'], '') or ''
-                    options = [p.strip() for p in str(options_raw).split(',') if p.strip()]
-
-                correct_raw = str(
-                    get_cell(row, col_by_canon.get('correct_answers'), '') or ''
-                )
-                difficulty = parse_difficulty(
-                    get_cell(row, col_by_canon.get('difficulty'), 'medium')
-                )
-                bloom = parse_bloom(
-                    get_cell(row, col_by_canon.get('bloom_level'), 'remember')
-                )
-                image_url = get_cell(row, col_by_canon.get('image_url'), '') or ''
-                test_code = get_cell(row, col_by_canon.get('test_code'), '') or ''
-                points = parse_points(get_cell(row, col_by_canon.get('points'), 1))
-
-                with transaction.atomic():
-                    q = Question.objects.create(
-                        id_subject_id=subject_id,
-                        statement=str(text),
-                        question_type=qtype,
-                        difficulty=difficulty,
-                        bloom_level=bloom,
-                        image_url=image_url or None,
-                        points=points,
-                        status=True,
-                    )
-
-                    if qtype in ('MULTIPLE_CHOICE', 'MULTIPLE_SELECTION'):
-                        if len(options) < 2 or len(options) > 4:
-                            raise ValueError('Se requieren entre 2 y 4 opciones (separadas por coma).')
-                        correct_indices = set()
-                        for part in correct_raw.split(','):
-                            part = part.strip()
-                            if not part:
-                                continue
-                            if part.isdigit():
-                                correct_indices.add(int(part) - 1)
-                            else:
-                                for i, opt in enumerate(options):
-                                    if opt.lower() == part.lower():
-                                        correct_indices.add(i)
-                                        break
-                        if qtype == 'MULTIPLE_CHOICE' and len(correct_indices) != 1:
-                            raise ValueError('Para MULTIPLE_CHOICE indique exactamente un índice correcto (1..n).')
-                        if qtype == 'MULTIPLE_SELECTION' and len(correct_indices) < 1:
-                            raise ValueError('Indique al menos una respuesta correcta.')
-                        for i, opt in enumerate(options):
-                            Answer.objects.create(
-                                id_question=q,
-                                answer_text=opt,
-                                is_correct=i in correct_indices,
-                            )
-                    elif qtype == 'OPEN':
-                        pass
-                    elif qtype == 'CODE':
-                        tests = [test_code] if test_code else []
-                        if not tests:
-                            raise ValueError('test_code es obligatorio para tipo CODE.')
-                        CodeQuestion.objects.create(
-                            question=q,
-                            language='python',
-                            test_cases=tests,
-                        )
-                    else:
-                        raise ValueError(f'Tipo no soportado: {qtype}')
-
+                _process_upload_row(row, col_by_canon, col_by_header, request.user)
                 created += 1
             except Exception as exc:
                 errors.append({'row': row_idx, 'error': str(exc)})
