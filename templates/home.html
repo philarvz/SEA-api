@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SEA API — Sistema de Evaluación Académica</title>
+  <style>
+    /* ── Reset & base ──────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0b0f1a;
+      --surface:   #111827;
+      --card:      #161d2e;
+      --border:    #1f2c45;
+      --accent:    #3b82f6;
+      --accent2:   #6366f1;
+      --green:     #22c55e;
+      --yellow:    #eab308;
+      --red:       #ef4444;
+      --text:      #e2e8f0;
+      --muted:     #64748b;
+      --radius:    12px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Animated gradient background ─────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 20% -10%, rgba(59,130,246,.18) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 110%, rgba(99,102,241,.14) 0%, transparent 55%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Layout ────────────────────────────────────────────── */
+    .wrapper {
+      position: relative;
+      z-index: 1;
+      max-width: 1060px;
+      margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+
+    /* ── Header / Hero ─────────────────────────────────────── */
+    header {
+      text-align: center;
+      padding: 72px 0 52px;
+    }
+
+    .logo-ring {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 72px; height: 72px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      box-shadow: 0 0 40px rgba(99,102,241,.35);
+      margin-bottom: 24px;
+      font-size: 32px;
+    }
+
+    header h1 {
+      font-size: clamp(2rem, 5vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -1px;
+      background: linear-gradient(to right, #93c5fd, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    header p.subtitle {
+      margin-top: 12px;
+      font-size: 1.05rem;
+      color: var(--muted);
+      max-width: 540px;
+      margin-inline: auto;
+    }
+
+    /* ── Status badge ──────────────────────────────────────── */
+    .status-bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 28px;
+      padding: 8px 18px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background .4s;
+    }
+    .dot.online  { background: var(--green);  box-shadow: 0 0 8px var(--green); }
+    .dot.offline { background: var(--red);    box-shadow: 0 0 8px var(--red); }
+    .dot.checking{
+      background: var(--yellow);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; } 50% { opacity: .3; }
+    }
+
+    #status-text { color: var(--text); font-weight: 500; }
+
+    /* ── CTA buttons ───────────────────────────────────────── */
+    .cta-group {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 36px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 24px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      transition: transform .15s, box-shadow .15s, opacity .15s;
+    }
+    .btn:hover { transform: translateY(-2px); opacity: .92; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(99,102,241,.35);
+    }
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Section titles ────────────────────────────────────── */
+    .section { margin-top: 60px; }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .section-header h2 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .section-line {
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ── Modules grid ──────────────────────────────────────── */
+    .modules-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 14px;
+    }
+
+    .module-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 18px;
+      transition: border-color .2s, box-shadow .2s, transform .2s;
+      cursor: default;
+    }
+
+    .module-card:hover {
+      border-color: var(--accent2);
+      box-shadow: 0 0 20px rgba(99,102,241,.12);
+      transform: translateY(-3px);
+    }
+
+    .module-icon {
+      font-size: 1.6rem;
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    .module-name {
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--text);
+    }
+
+    .module-path {
+      margin-top: 4px;
+      font-size: 0.78rem;
+      color: var(--accent);
+      font-family: 'Courier New', monospace;
+    }
+
+    .module-desc {
+      margin-top: 8px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* ── Endpoints showcase ────────────────────────────────── */
+    .endpoints-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .endpoint-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      transition: border-color .2s;
+    }
+    .endpoint-row:hover { border-color: var(--border); }
+
+    .method {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 5px;
+      min-width: 50px;
+      text-align: center;
+      font-family: 'Courier New', monospace;
+      letter-spacing: .5px;
+    }
+    .get    { background: rgba(34,197,94,.15);  color: #4ade80; border: 1px solid rgba(34,197,94,.25); }
+    .post   { background: rgba(59,130,246,.15); color: #60a5fa; border: 1px solid rgba(59,130,246,.25); }
+    .patch  { background: rgba(234,179,8,.15);  color: #fbbf24; border: 1px solid rgba(234,179,8,.25); }
+    .delete { background: rgba(239,68,68,.15);  color: #f87171; border: 1px solid rgba(239,68,68,.25); }
+
+    .ep-path {
+      font-family: 'Courier New', monospace;
+      font-size: 0.88rem;
+      color: var(--text);
+      flex: 1;
+    }
+
+    .ep-desc {
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: right;
+    }
+
+    /* ── Tech stack chips ──────────────────────────────────── */
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      padding: 5px 14px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      transition: color .2s, border-color .2s;
+    }
+    .chip:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* ── Footer ────────────────────────────────────────────── */
+    footer {
+      margin-top: 72px;
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 28px;
+    }
+
+    footer a { color: var(--accent); text-decoration: none; }
+
+    /* ── Responsive tweaks ─────────────────────────────────── */
+    @media (max-width: 540px) {
+      .ep-desc { display: none; }
+      .endpoint-row { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- ── Hero ──────────────────────────────────────────── -->
+  <header>
+    <div class="logo-ring">🎓</div>
+    <h1>SEA API</h1>
+    <p class="subtitle">
+      Sistema de Evaluación Académica — REST API para gestión de exámenes,
+      usuarios y evaluaciones académicas institucionales.
+    </p>
+
+    <div class="status-bar">
+      <span class="dot checking" id="status-dot"></span>
+      <span id="status-text">Verificando servicio…</span>
+      <span id="status-version" style="color:var(--muted); font-size:.8rem"></span>
+    </div>
+
+    <div class="cta-group">
+      <a class="btn btn-primary" href="/api/docs/">
+        📖 Documentación Swagger
+      </a>
+      <a class="btn btn-ghost" href="/api/redoc/">
+        📄 ReDoc
+      </a>
+      <a class="btn btn-ghost" href="/api/schema/">
+        ⬇ OpenAPI Schema
+      </a>
+    </div>
+  </header>
+
+  <!-- ── Módulos ────────────────────────────────────────── -->
+  <section class="section">
+    <div class="section-header">
+      <h2>Módulos</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="modules-grid">
+
+      <div class="module-card">
+        <span class="module-icon">🔐</span>
+        <div class="module-name">Authentication</div>
+        <div class="module-path">/api/auth/</div>
+        <div class="module-desc">Login JWT, refresh de tokens, cambio de contraseña y health check.</div>
+      </div>
+
+      <div class="module-card">
+        <span class="module-icon">👤</span>
+        <div class="module-name">Users</div>
+        <div class="module-path">/api/users/</div>
+        <div class="module-desc">Gestión de cuentas: estudiantes, profesores y administradores.</div>
+      </div>
+
+      <div class="module-card">
+        <span class="module-icon">📚</span>
+        <div class="module-name">Academic</div>
+        <div class="module-path">/api/academic/</div>
+        <div class="module-desc">Períodos, grupos, materias y unidades académicas.</div>
+      </div>
+
+      <div class="module-card">
+        <span class="module-icon">❓</span>
+        <div class="module-name">Questions</div>
+        <div class="module-path">/api/questions/</div>
+        <div class="module-desc">Banco de preguntas con opciones de respuesta y niveles de dificultad.</div>
+      </div>
+
+      <div class="module-card">
+        <span class="module-icon">📝</span>
+        <div class="module-name">Exams</div>
+        <div class="module-path">/api/exams/</div>
+        <div class="module-desc">Creación, asignación y seguimiento de exámenes.</div>
+      </div>
+
+      <div class="module-card">
+        <span class="module-icon">✅</span>
+        <div class="module-name">Answers</div>
+        <div class="module-path">/api/answers/</div>
+        <div class="module-desc">Envío y calificación de respuestas de los estudiantes.</div>
+      </div>
+
+      <div class="module-card">
+        <span class="module-icon">🕵️</span>
+        <div class="module-name">Audit</div>
+        <div class="module-path">/api/audit-logs/</div>
+        <div class="module-desc">Registro de actividad y trazabilidad de operaciones críticas.</div>
+      </div>
+
+      <div class="module-card">
+        <span class="module-icon">📊</span>
+        <div class="module-name">Reports</div>
+        <div class="module-path">/api/reports/</div>
+        <div class="module-desc">Exportación de calificaciones y reportes académicos en Excel.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── Endpoints destacados ───────────────────────────── -->
+  <section class="section">
+    <div class="section-header">
+      <h2>Endpoints principales</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="endpoints-list">
+      <div class="endpoint-row">
+        <span class="method get">GET</span>
+        <span class="ep-path">/api/auth/health/</span>
+        <span class="ep-desc">Estado del servicio</span>
+      </div>
+      <div class="endpoint-row">
+        <span class="method post">POST</span>
+        <span class="ep-path">/api/auth/login/</span>
+        <span class="ep-desc">Obtener token JWT</span>
+      </div>
+      <div class="endpoint-row">
+        <span class="method post">POST</span>
+        <span class="ep-path">/api/auth/token/refresh/</span>
+        <span class="ep-desc">Renovar access token</span>
+      </div>
+      <div class="endpoint-row">
+        <span class="method get">GET</span>
+        <span class="ep-path">/api/exams/</span>
+        <span class="ep-desc">Listar exámenes</span>
+      </div>
+      <div class="endpoint-row">
+        <span class="method post">POST</span>
+        <span class="ep-path">/api/exams/</span>
+        <span class="ep-desc">Crear examen</span>
+      </div>
+      <div class="endpoint-row">
+        <span class="method get">GET</span>
+        <span class="ep-path">/api/users/</span>
+        <span class="ep-desc">Listar usuarios</span>
+      </div>
+      <div class="endpoint-row">
+        <span class="method post">POST</span>
+        <span class="ep-path">/api/answers/submit/</span>
+        <span class="ep-desc">Enviar respuestas</span>
+      </div>
+      <div class="endpoint-row">
+        <span class="method get">GET</span>
+        <span class="ep-path">/api/reports/</span>
+        <span class="ep-desc">Exportar calificaciones</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Stack tecnológico ──────────────────────────────── -->
+  <section class="section">
+    <div class="section-header">
+      <h2>Stack</h2>
+      <div class="section-line"></div>
+    </div>
+    <div class="chips">
+      <span class="chip">🐍 Python 3.11</span>
+      <span class="chip">🎸 Django 5.0</span>
+      <span class="chip">🔌 Django REST Framework</span>
+      <span class="chip">🔑 JWT Auth</span>
+      <span class="chip">🐘 PostgreSQL · Supabase</span>
+      <span class="chip">📬 Gmail SMTP</span>
+      <span class="chip">⏱ APScheduler</span>
+      <span class="chip">📖 Swagger / OpenAPI</span>
+      <span class="chip">🚀 Gunicorn</span>
+      <span class="chip">🌐 Render</span>
+    </div>
+  </section>
+
+  <!-- ── Footer ─────────────────────────────────────────── -->
+  <footer>
+    <p>
+      SEA API &mdash; Sistema de Evaluación Académica &nbsp;|&nbsp;
+      v1.0.0 &nbsp;|&nbsp;
+      <a href="/api/docs/">Swagger UI</a> &nbsp;&middot;&nbsp;
+      <a href="/api/redoc/">ReDoc</a> &nbsp;&middot;&nbsp;
+      <a href="/admin/">Admin</a>
+    </p>
+    <p style="margin-top:8px; font-size:.75rem">
+      Construido con ❤️ · LegacyDevs
+    </p>
+  </footer>
+
+</div>
+
+<!-- ── Health check script ───────────────────────────────── -->
+<script>
+  (function () {
+    const dot  = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    const ver  = document.getElementById('status-version');
+
+    fetch('/api/auth/health/', { method: 'GET', cache: 'no-store' })
+      .then(res => {
+        if (!res.ok) throw new Error('not ok');
+        return res.json();
+      })
+      .then(data => {
+        dot.className  = 'dot online';
+        text.textContent = 'Servicio operativo';
+        if (data.version) ver.textContent = '· v' + data.version;
+      })
+      .catch(() => {
+        dot.className  = 'dot offline';
+        text.textContent = 'Servicio no disponible';
+      });
+  })();
+</script>
+
+</body>
+</html>
