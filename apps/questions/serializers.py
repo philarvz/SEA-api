@@ -6,7 +6,7 @@ from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
 
 from apps.academic.models import Subject
-from utils.sanitizers import contains_html, MAX_STATEMENT_LENGTH, MAX_ANSWER_TEXT_LENGTH
+from utils.sanitizers import MAX_STATEMENT_LENGTH, MAX_ANSWER_TEXT_LENGTH
 
 from .models import Question, Answer, CodeQuestion
 from .subject_access import allowed_subject_ids_for_question_user
@@ -47,8 +47,6 @@ class AnswerOptionSerializer(serializers.ModelSerializer):
         value = (value or '').strip()
         if not value:
             raise serializers.ValidationError('El texto de la opción no puede estar vacío.')
-        if contains_html(value):
-            raise serializers.ValidationError('El texto no debe contener HTML.')
         if len(value) > MAX_ANSWER_TEXT_LENGTH:
             raise serializers.ValidationError(f'Máximo {MAX_ANSWER_TEXT_LENGTH} caracteres.')
         return value
