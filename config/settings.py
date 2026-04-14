@@ -256,6 +256,9 @@ MOCK_PASSWORD = config('MOCK_PASSWORD', default='1234')
 EMAIL_BACKEND = 'anymail.backends.brevo.EmailBackend'
 ANYMAIL = {
     'BREVO_API_KEY': config('BREVO_API_KEY', default=''),
+    # Registra en logs el detalle de cada llamada a la API de Brevo.
+    # Útil para diagnosticar rechazos silenciosos de sender no verificado.
+    'DEBUG_API_REQUESTS': config('ANYMAIL_DEBUG', default=False, cast=bool),
 }
 DEFAULT_FROM_EMAIL = config(
     'DEFAULT_FROM_EMAIL',
