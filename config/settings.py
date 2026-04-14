@@ -20,7 +20,7 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-default-key-change-th
 ENCRYPTION_KEY = config('ENCRYPTION_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=True, cast=bool)
+DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',')
 
@@ -174,7 +174,8 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': config('THROTTLE_ANON_RATE', default='30/minute'),
-        'user': config('THROTTLE_USER_RATE', default='120/minute'),
+        'user': config('THROTTLE_USER_RATE', default='60/minute'),
+        'login': config('THROTTLE_LOGIN_RATE', default='5/minute'),
         'student_assignments': config('THROTTLE_STUDENT_RATE', default=_THROTTLE_RATE_STANDARD),
         'created_by_me': config('THROTTLE_CREATED_BY_ME_RATE', default=_THROTTLE_RATE_STANDARD),
         'teacher_subjects': config('THROTTLE_TEACHER_SUBJECTS_RATE', default=_THROTTLE_RATE_STANDARD),
@@ -193,7 +194,8 @@ SIMPLE_JWT = {
     'UPDATE_LAST_LOGIN': False,
 
     'ALGORITHM': config('JWT_ALGORITHM', default='HS256'),
-    'SIGNING_KEY': config('JWT_SECRET_KEY', default='legacydevs'),
+    # JWT secret MUST be set via .env. Use: python -c "import secrets; print(secrets.token_urlsafe(50))"
+    'SIGNING_KEY': config('JWT_SECRET_KEY', default='CHANGE-ME-IN-PRODUCTION'),
     'VERIFYING_KEY': None,
     'AUDIENCE': None,
     'ISSUER': None,
@@ -218,8 +220,10 @@ SIMPLE_JWT = {
 }
 
 
-# CORS Configuration - Open for development
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS Configuration
+CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL', default=False, cast=bool)
+CORS_ALLOWED_ORIGINS = config(
+    'CORS_ALLOWED_ORIGINS').split(',')
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_METHODS = [
     'DELETE',
@@ -387,3 +391,18 @@ LOGGING = {
 # - May 1 at 00:00 (Periodo Mayo-Agosto)
 # - September 1 at 00:00 (Periodo Septiembre-Diciembre)
 APSCHEDULER_ENABLED = config('APSCHEDULER_ENABLED', default=True, cast=bool)
+
+
+# ------------------------------------------------------------------
+# Security hardening
+# ------------------------------------------------------------------
+# Limit upload sizes to prevent DoS via large payloads
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024    # 10 MB
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
+
+# Security headers
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+CSRF_COOKIE_HTTPONLY = True

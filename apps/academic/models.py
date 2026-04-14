@@ -107,7 +107,7 @@ class Group(BaseAuditModel):
         db_column='id_generation',
         related_name='groups',
     )
-    group_letter = models.CharField(max_length=5, db_column='group_letter')
+    group_letter = models.CharField(max_length=1, db_column='group_letter')
     academic_level = models.PositiveIntegerField(db_column='academic_level')
     status = models.BooleanField(default=True)
 
@@ -120,10 +120,10 @@ class Group(BaseAuditModel):
 
     def clean(self):
         if self.academic_level < 1:
-            raise ValidationError('academic_level must be at least 1.')
+            raise ValidationError('El nivel académico debe ser al menos 1.')
         if self.id_generation and self.academic_level > self.id_generation.total_levels:
             raise ValidationError(
-                f'academic_level cannot exceed generation total_levels ({self.id_generation.total_levels}).'
+                f'El nivel académico no puede exceder el total de niveles de la generación ({self.id_generation.total_levels}).'
             )
 
     def save(self, *args, **kwargs):
