@@ -10,7 +10,14 @@ urlpatterns = [
     
     # API endpoints
     path('api/auth/', include('apps.authentication.urls')),
+    path('api/exams/', include('apps.exams.urls')),
     path('api/', include('apps.core.urls')),
+    path('api/academic/', include('apps.academic.urls')),
+    path('api/questions/', include('apps.questions.urls')),
+    path('api/answers/', include('apps.answers.urls')),
+    path('api/users/', include('apps.users.urls')),
+    path('api/audit-logs/', include('apps.audit.urls')),
+    path('api/reports/', include('apps.reports.urls')),
     
     # Swagger/OpenAPI documentation
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

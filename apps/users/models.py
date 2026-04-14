@@ -1,72 +1,140 @@
 """
 Users module models
-Includes: Person, UserAccount
+Includes: User (AbstractUser), StudentProfile, TeacherProfile
 """
 
 from django.db import models
+from django.contrib.auth.models import AbstractUser
 
 
-class Person(models.Model):
+class User(AbstractUser):
     """
-    Model representing a person in the system (student, admin or teacher)
+    Custom User model extending AbstractUser.
+    Centraliza autenticación e identidad básica.
+    AbstractUser ya provee: username, first_name, last_name,
+    email, password, is_active, date_joined, etc.
     """
-    id_person = models.AutoField(primary_key=True, db_column='id_person')
-    first_name = models.CharField(max_length=100, db_column='first_name')
-    last_name = models.CharField(max_length=150, db_column='last_name')
-    email = models.EmailField(max_length=150, unique=True)
-    id_group = models.ForeignKey(
-        'academic.Group',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        db_column='id_group',
-        related_name='persons'
-    )
-    status = models.BooleanField(default=True)
 
-    class Meta:
-        db_table = 'person'
-        verbose_name = 'Person'
-        verbose_name_plural = 'Persons'
-        ordering = ['last_name', 'first_name']
-
-    def __str__(self):
-        return self.full_name
-
-    @property
-    def full_name(self):
-        """Returns the person's full name"""
-        return f"{self.first_name} {self.last_name}"
-
-
-class UserAccount(models.Model):
-    """
-    Model representing a user account (1:1 with Person)
-    Handles authentication and role management
-    """
     ROLE_CHOICES = [
         ('student', 'Student'),
         ('teacher', 'Teacher'),
         ('admin', 'Administrator'),
     ]
 
-    id_user = models.AutoField(primary_key=True, db_column='id_user')
-    id_person = models.OneToOneField(
-        Person,
-        on_delete=models.CASCADE,
-        db_column='id_person',
-        related_name='user_account'
+    id_user = models.AutoField(primary_key=True)
+    # Sobreescribimos email para hacerlo único
+    email = models.EmailField(max_length=150, unique=True)
+    # Matrícula institucional única por usuario (ej. 20233tn070)
+    # Opcional para administradores, requerido para estudiantes y docentes
+    matricula = models.CharField(
+        max_length=20,
+        unique=True,
+        null=True,
+        blank=True,
+        db_column='matricula',
+        help_text='Matrícula institucional única del usuario. No requerido para administradores.',
     )
-    username = models.CharField(max_length=100, unique=True)
-    password_hash = models.CharField(max_length=255, db_column='password_hash')
-    role = models.CharField(max_length=50, choices=ROLE_CHOICES)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
     status = models.BooleanField(default=True)
 
     class Meta:
-        db_table = 'user_account'
-        verbose_name = 'User Account'
-        verbose_name_plural = 'User Accounts'
-        ordering = ['username']
+        db_table = 'user'
+        verbose_name = 'User'
+        verbose_name_plural = 'Users'
+        ordering = ['last_name', 'first_name']
 
     def __str__(self):
         return f"{self.username} ({self.role})"
+
+    @property
+    def full_name(self):
+        """Retorna el nombre completo del usuario"""
+        return f"{self.first_name} {self.last_name}"
+
+
+class StudentProfile(models.Model):
+    """
+    Perfil específico para estudiantes.
+    Almacena datos propios del rol: grupo académico.
+    """
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='student_profile'
+    )
+    group = models.ForeignKey(
+        'academic.Group',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='students'
+    )
+
+    class Meta:
+        db_table = 'student_profile'
+        verbose_name = 'Student Profile'
+        verbose_name_plural = 'Student Profiles'
+
+    def __str__(self):
+        return f"Student: {self.user.username}"
+
+
+class TeacherProfile(models.Model):
+    """
+    Perfil específico para docentes.
+    Almacena datos propios del rol: departamento y materias asignadas.
+    """
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='teacher_profile'
+    )
+    department = models.CharField(max_length=150, blank=True)
+    # Materias asignadas al docente (M2M)
+    subjects = models.ManyToManyField(
+        'academic.Subject',
+        blank=True,
+        related_name='teachers',
+        db_table='teacher_subject',
+    )
+
+    class Meta:
+        db_table = 'teacher_profile'
+        verbose_name = 'Teacher Profile'
+        verbose_name_plural = 'Teacher Profiles'
+
+    def __str__(self):
+        return f"Teacher: {self.user.username}"
+
+
+class PasswordResetCode(models.Model):
+    """
+    Almacena códigos de verificación de 6 dígitos para recuperación de contraseña.
+    Los códigos expiran después de 15 minutos.
+    """
+    
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='password_reset_codes'
+    )
+    code = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_used = models.BooleanField(default=False)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'password_reset_code'
+        verbose_name = 'Password Reset Code'
+        verbose_name_plural = 'Password Reset Codes'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Code for {self.user.email} - {self.code}"
+
+    def is_valid(self) -> bool:
+        """Verifica si el código aún es válido (no usado y no expirado)"""
+        from django.utils import timezone
+        return not self.is_used and self.expires_at > timezone.now()
