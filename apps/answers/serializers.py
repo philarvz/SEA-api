@@ -112,9 +112,20 @@ class SubmitExamSerializer(serializers.Serializer):
 
 
 class ManualGradeSerializer(serializers.Serializer):
-    student_answer_id = serializers.IntegerField(min_value=1)
+    student_answer_id = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    exam_assignment_id = serializers.IntegerField(min_value=1, required=False)
+    question_id = serializers.IntegerField(min_value=1, required=False)
     score = serializers.DecimalField(max_digits=6, decimal_places=2, min_value=Decimal('0'))
     is_correct = serializers.BooleanField()
+
+    def validate(self, attrs):
+        has_sa = attrs.get('student_answer_id') is not None
+        has_pair = attrs.get('exam_assignment_id') is not None and attrs.get('question_id') is not None
+        if not has_sa and not has_pair:
+            raise serializers.ValidationError(
+                'Debe enviar student_answer_id o bien exam_assignment_id y question_id.'
+            )
+        return attrs
 
 
 class ForfeitExamSerializer(serializers.Serializer):

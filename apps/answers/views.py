@@ -278,13 +278,38 @@ class ManualGradeAnswerView(APIView):
             return error_response('Datos invalidos.', serializer.errors)
 
         payload = serializer.validated_data
-        student_answer = (
-            StudentAnswer.objects.select_related('exam_assignment', 'exam_assignment__exam', 'question')
-            .filter(pk=payload['student_answer_id'])
-            .first()
-        )
-        if not student_answer:
-            return error_response('Respuesta del estudiante no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+
+        if payload.get('student_answer_id'):
+            student_answer = (
+                StudentAnswer.objects.select_related('exam_assignment', 'exam_assignment__exam', 'question')
+                .filter(pk=payload['student_answer_id'])
+                .first()
+            )
+            if not student_answer:
+                return error_response('Respuesta del estudiante no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+        else:
+            # Unanswered question: find or create StudentAnswer
+            assignment = (
+                ExamAssignment.objects.select_related('exam')
+                .filter(pk=payload['exam_assignment_id'])
+                .first()
+            )
+            if not assignment:
+                return error_response('Asignación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+
+            question = Question.objects.filter(pk=payload['question_id']).first()
+            if not question:
+                return error_response('Pregunta no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+
+            # Verify the question belongs to this exam
+            if not ExamQuestion.objects.filter(id_exam=assignment.exam, id_question=question).exists():
+                return error_response('La pregunta no pertenece a este examen.', status_code=status.HTTP_400_BAD_REQUEST)
+
+            student_answer, _created = StudentAnswer.objects.get_or_create(
+                exam_assignment=assignment,
+                question=question,
+                defaults={'is_correct': None, 'score': None},
+            )
 
         role = _get_role(request)
         if role == 'teacher' and student_answer.exam_assignment.exam.id_teacher_id != request.user.pk:
@@ -476,6 +501,48 @@ class AssignmentAnswersView(APIView):
             .order_by('id_student_answer')
         )
         data = StudentAnswerSerializer(answers, many=True).data
+
+        # Include unanswered questions so the teacher can see and grade them
+        answered_question_ids = set(answers.values_list('question_id', flat=True))
+        exam_questions = (
+            ExamQuestion.objects.filter(id_exam=assignment.exam)
+            .select_related('id_question')
+            .prefetch_related('id_question__answers')
+        )
+        for eq in exam_questions:
+            q = eq.id_question
+            if q.pk not in answered_question_ids:
+                data.append({
+                    'id_student_answer': None,
+                    'exam_assignment': assignment.pk,
+                    'question': q.pk,
+                    'question_type': q.question_type,
+                    'question_statement': q.statement,
+                    'question_image_url': getattr(q, 'image_url', None),
+                    'question_points': q.points,
+                    'question_difficulty': q.difficulty,
+                    'question_bloom_level': q.bloom_level,
+                    'selected_answer': None,
+                    'selected_answer_text': None,
+                    'selected_answers': [],
+                    'selected_answers_texts': [],
+                    'correct_answer_text': (
+                        (q.answers.filter(is_correct=True).first() or type('', (), {'answer_text': None})).answer_text
+                        if q.question_type == 'MULTIPLE_CHOICE' else None
+                    ),
+                    'correct_answers_texts': (
+                        list(q.answers.filter(is_correct=True).values_list('answer_text', flat=True))
+                        if q.question_type == 'MULTIPLE_SELECTION' else []
+                    ),
+                    'answer_text': '',
+                    'code_answer': '',
+                    'is_correct': None,
+                    'score': None,
+                    'evaluated_at': None,
+                    'created_at': None,
+                    'modified_at': None,
+                })
+
         return success_response(
             {
                 'assignment_id': assignment.pk,

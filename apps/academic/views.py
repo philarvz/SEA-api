@@ -33,7 +33,7 @@ from .serializers import (
     TeacherSubjectSerializer,
     AssignableGroupSerializer,
 )
-from .permissions import IsTeacherOrAdmin
+from .permissions import IsTeacherOrAdmin, IsAdmin, get_user_role
 from .services import PeriodService
 from apps.users.models import StudentProfile, TeacherProfile
 from utils.responses import success_response, error_response
@@ -45,6 +45,8 @@ MSG_GENERATION_NOT_FOUND = 'Generación no encontrada.'
 MSG_PERIOD_NOT_FOUND = 'Periodo no encontrado.'
 MSG_GROUP_NOT_FOUND = 'Grupo no encontrado.'
 MSG_SUBJECT_NOT_FOUND = 'Materia no encontrada.'
+MSG_ADMIN_ONLY = 'Solo los administradores pueden realizar esta acción.'
+MSG_INACTIVE_RECORD = 'No se puede editar un registro desactivado.'
 
 
 class CatalogPagination(PageNumberPagination):
@@ -113,6 +115,8 @@ class GenerationListCreateView(APIView):
         responses={201: GenerationSerializer},
     )
     def post(self, request):
+        if get_user_role(request) != 'admin':
+            return error_response(MSG_ADMIN_ONLY, status_code=status.HTTP_403_FORBIDDEN)
         serializer = GenerationSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Registro de generación rechazado | errors={}', serializer.errors)
@@ -156,9 +160,13 @@ class GenerationDetailView(APIView):
         responses={200: GenerationSerializer, 404: OpenApiResponse(description='No encontrada')},
     )
     def put(self, request, pk):
+        if get_user_role(request) != 'admin':
+            return error_response(MSG_ADMIN_ONLY, status_code=status.HTTP_403_FORBIDDEN)
         generation = self._get_generation(pk)
         if not generation:
             return error_response(MSG_GENERATION_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+        if not generation.status:
+            return error_response(MSG_INACTIVE_RECORD, status_code=status.HTTP_400_BAD_REQUEST)
         serializer = GenerationSerializer(generation, data=request.data)
         if not serializer.is_valid():
             logger.warning('Actualización de generación rechazada | id={} errors={}', pk, serializer.errors)
@@ -176,7 +184,7 @@ class GenerationDetailView(APIView):
 
 
 class GenerationStatusView(APIView):
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Cambiar estado de generación',
@@ -192,7 +200,13 @@ class GenerationStatusView(APIView):
         serializer = GroupStatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             return error_response(MSG_INVALID_DATA, serializer.errors)
-        generation.status = serializer.validated_data['status']
+        new_status = serializer.validated_data['status']
+        if not new_status and Group.objects.filter(id_generation=generation).exists():
+            return error_response(
+                'No se puede desactivar una generación que tiene grupos registrados.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        generation.status = new_status
         generation.save(update_fields=['status'])
         state = 'activada' if generation.status else 'desactivada'
         logger.info('Generación {} | id={}', state, pk)
@@ -207,7 +221,7 @@ class GenerationStatusView(APIView):
 # ---------------------------------------------------------------------------
 
 class PeriodListCreateView(APIView):
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Listar periodos académicos',
@@ -252,7 +266,7 @@ class PeriodListCreateView(APIView):
 
 
 class PeriodCurrentView(APIView):
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Obtener periodo académico actual',
@@ -275,7 +289,7 @@ class PeriodCurrentView(APIView):
 
 
 class PeriodDetailView(APIView):
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     def _get_period(self, pk):
         try:
@@ -304,6 +318,8 @@ class PeriodDetailView(APIView):
         period = self._get_period(pk)
         if not period:
             return error_response(MSG_PERIOD_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+        if not period.status:
+            return error_response(MSG_INACTIVE_RECORD, status_code=status.HTTP_400_BAD_REQUEST)
         # Only accept year and period_name; dates are auto-calculated
         serializer = PeriodSerializer(period, data=request.data)
         if not serializer.is_valid():
@@ -321,7 +337,7 @@ class PeriodDetailView(APIView):
         return success_response(serializer.data, 'Periodo actualizado exitosamente.')
 
 class PeriodStatusView(APIView):
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Cambiar estado de periodo académico',
@@ -352,7 +368,7 @@ class PeriodAdvanceGroupsView(APIView):
     Avanza el nivel académico de todos los grupos activos en 1,
     con un límite máximo igual al nivel académico máximo que se encuentra en la tabla Generación.
     """
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Avanzar el nivel académico de los grupos activos',
@@ -411,6 +427,22 @@ class GroupListCreateView(APIView):
             .annotate(students_count=Count('students'))
             .order_by('id_generation', 'group_letter')
         )
+
+        # Teachers can only see their own groups
+        role = get_user_role(request)
+        if role == 'teacher':
+            try:
+                profile = TeacherProfile.objects.get(user_id=request.user.pk)
+                assigned_group_ids = (
+                    GroupTeacherAssignment.objects
+                    .filter(teacher=profile)
+                    .values_list('group_id', flat=True)
+                    .distinct()
+                )
+                queryset = queryset.filter(pk__in=assigned_group_ids)
+            except TeacherProfile.DoesNotExist:
+                queryset = queryset.none()
+
         id_generation = request.query_params.get('id_generation')
         academic_level = request.query_params.get('academic_level')
         group_letter = request.query_params.get('group_letter')
@@ -433,6 +465,8 @@ class GroupListCreateView(APIView):
         responses={201: GroupSerializer},
     )
     def post(self, request):
+        if get_user_role(request) != 'admin':
+            return error_response(MSG_ADMIN_ONLY, status_code=status.HTTP_403_FORBIDDEN)
         serializer = GroupCreateSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Registro de grupo rechazado | errors={}', serializer.errors)
@@ -504,9 +538,13 @@ class GroupDetailView(APIView):
         responses={200: GroupSerializer, 404: OpenApiResponse(description='No encontrado')},
     )
     def put(self, request, pk):
+        if get_user_role(request) != 'admin':
+            return error_response(MSG_ADMIN_ONLY, status_code=status.HTTP_403_FORBIDDEN)
         group = self._get_group(pk)
         if not group:
             return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+        if not group.status:
+            return error_response(MSG_INACTIVE_RECORD, status_code=status.HTTP_400_BAD_REQUEST)
         serializer = GroupUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Actualización de grupo rechazada | id={} errors={}', pk, serializer.errors)
@@ -532,7 +570,7 @@ class GroupDetailView(APIView):
 
 
 class GroupStatusView(APIView):
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Cambiar estado de grupo académico',
@@ -548,7 +586,13 @@ class GroupStatusView(APIView):
         serializer = GroupStatusUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             return error_response(MSG_INVALID_DATA, serializer.errors)
-        group.status = serializer.validated_data['status']
+        new_status = serializer.validated_data['status']
+        if not new_status and StudentProfile.objects.filter(group=group).exists():
+            return error_response(
+                'No se puede desactivar un grupo que tiene alumnos asignados.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        group.status = new_status
         group.save(update_fields=['status'])
         state = 'activado' if group.status else 'desactivado'
         logger.info('Grupo {} | id={}', state, pk)
@@ -559,7 +603,7 @@ class GroupStatusView(APIView):
 
 
 class GroupAssignStudentView(APIView):
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Asignar alumno a grupo',
@@ -622,7 +666,7 @@ class GroupAssignmentsView(APIView):
       - Teacher must be active, have role=teacher, and have that subject assigned.
       - Replaces existing assignment for the same subject (upsert behaviour).
     """
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Listar asignaciones docente-materia de un grupo',
@@ -631,7 +675,7 @@ class GroupAssignmentsView(APIView):
     )
     def get(self, request, pk):
         try:
-            Group.objects.get(pk=pk)
+            group = Group.objects.get(pk=pk)
         except Group.DoesNotExist:
             return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
@@ -736,7 +780,7 @@ class GroupAssignmentDetailView(APIView):
     DELETE /api/academic/groups/{pk}/assignments/{a_pk}/
     Removes a specific teacher-subject assignment from a group.
     """
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Eliminar asignación docente-materia de un grupo',
@@ -762,7 +806,7 @@ class GroupAvailableTeachersView(APIView):
     Returns teachers eligible to teach a specific subject in this group.
     subject_id is required. The subject must match the group's current academic_level.
     """
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Listar docentes disponibles para una materia en un grupo',
@@ -1096,7 +1140,17 @@ class SubjectListCreateView(APIView):
         responses={200: SubjectSerializer(many=True)},
     )
     def get(self, request):
+        role = get_user_role(request)
         queryset = Subject.objects.prefetch_related('units').all()
+
+        # Teachers can only see their own assigned subjects
+        if role == 'teacher':
+            try:
+                profile = TeacherProfile.objects.get(user_id=request.user.pk)
+                queryset = profile.subjects.prefetch_related('units').all()
+            except TeacherProfile.DoesNotExist:
+                queryset = Subject.objects.none()
+
         academic_level = request.query_params.get('academic_level')
         name = request.query_params.get('name')
         status_param = request.query_params.get('status')
@@ -1116,6 +1170,8 @@ class SubjectListCreateView(APIView):
         responses={201: SubjectSerializer},
     )
     def post(self, request):
+        if get_user_role(request) != 'admin':
+            return error_response(MSG_ADMIN_ONLY, status_code=status.HTTP_403_FORBIDDEN)
         serializer = SubjectSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning('Registro de materia rechazado | errors={}', serializer.errors)
@@ -1170,6 +1226,15 @@ class SubjectDetailView(APIView):
         subject = self._get_subject(pk)
         if not subject:
             return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+        # Teachers can only see their own subjects
+        role = get_user_role(request)
+        if role == 'teacher':
+            try:
+                profile = TeacherProfile.objects.get(user_id=request.user.pk)
+                if not profile.subjects.filter(pk=pk).exists():
+                    return error_response('No tienes acceso a esta materia.', status_code=status.HTTP_403_FORBIDDEN)
+            except TeacherProfile.DoesNotExist:
+                return error_response('No tienes acceso a esta materia.', status_code=status.HTTP_403_FORBIDDEN)
         return success_response(SubjectSerializer(subject).data)
 
     @extend_schema(
@@ -1179,9 +1244,13 @@ class SubjectDetailView(APIView):
         responses={200: SubjectSerializer, 404: OpenApiResponse(description='No encontrada')},
     )
     def put(self, request, pk):
+        if get_user_role(request) != 'admin':
+            return error_response(MSG_ADMIN_ONLY, status_code=status.HTTP_403_FORBIDDEN)
         subject = self._get_subject(pk)
         if not subject:
             return error_response(MSG_SUBJECT_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
+        if not subject.status:
+            return error_response(MSG_INACTIVE_RECORD, status_code=status.HTTP_400_BAD_REQUEST)
         serializer = SubjectSerializer(subject, data=request.data)
         if not serializer.is_valid():
             logger.warning('Actualización de materia rechazada | id={} errors={}', pk, serializer.errors)
@@ -1220,7 +1289,7 @@ class SubjectUnitsBySubjectView(APIView):
         return paginated_success_response(request, units, UnitSerializer)
 
 class SubjectStatusView(APIView):
-    permission_classes = [IsTeacherOrAdmin]
+    permission_classes = [IsAdmin]
 
     @extend_schema(
         summary='Cambiar estado de materia',
