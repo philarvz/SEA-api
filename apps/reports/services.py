@@ -1,6 +1,9 @@
+from django.core.exceptions import PermissionDenied
 from django.db.models import Avg, Max, Min
-from apps.exams.models import ExamAssignment
-from apps.academic.models import Group  # IMPORTANTE
+
+from apps.exams.models import Exam, ExamAssignment, ExamGroupAssignment
+from apps.academic.models import Group, GroupTeacherAssignment
+from apps.users.models import TeacherProfile
 
 
 class ReportService:
@@ -17,7 +20,13 @@ class ReportService:
 
     @staticmethod
     def _calculate_summary_metrics(qs):
-        total = qs.count()
+        total_exams = qs.count()
+
+        # ExamAssignment-based reports should count unique students, not rows.
+        if hasattr(qs.model, 'student_id'):
+            total_students = qs.values('student_id').distinct().count()
+        else:
+            total_students = total_exams
 
         avg = qs.aggregate(avg=Avg('score'))['avg'] or 0
         highest = qs.aggregate(max=Max('score'))['max']
@@ -25,10 +34,10 @@ class ReportService:
         approved = qs.filter(score__gte=70).count()
 
         return {
-            "totalStudents": total,
-            "totalExams": total,
+            "totalStudents": total_students,
+            "totalExams": total_exams,
             "averageGrade": avg,
-            "approvalRate": (approved / total * 100) if total else 0,
+            "approvalRate": (approved / total_exams * 100) if total_exams else 0,
             "highestGrade": highest,
             "lowestGrade": lowest,
         }
@@ -54,18 +63,108 @@ class ReportService:
             for r in ranges
         ]
 
+    @staticmethod
+    def get_accessible_groups(user):
+        role = getattr(user, 'role', None)
+
+        if role == 'admin':
+            return Group.objects.select_related('id_generation').order_by(
+                'academic_level', 'group_letter'
+            )
+
+        if role != 'teacher' or not getattr(user, 'is_authenticated', False):
+            return Group.objects.none()
+
+        try:
+            profile = TeacherProfile.objects.get(user_id=user.pk)
+        except TeacherProfile.DoesNotExist:
+            return Group.objects.none()
+
+        group_ids = (
+            GroupTeacherAssignment.objects
+            .filter(teacher=profile)
+            .values_list('group_id', flat=True)
+            .distinct()
+        )
+
+        return (
+            Group.objects
+            .select_related('id_generation')
+            .filter(pk__in=group_ids, status=True)
+            .order_by('academic_level', 'group_letter')
+        )
+
+    @staticmethod
+    def _can_access_group(user, group_id: int) -> bool:
+        if user is None or not getattr(user, 'is_authenticated', False):
+            return False
+
+        role = getattr(user, 'role', None)
+        if role != 'teacher':
+            return True
+
+        return ReportService.get_accessible_groups(user).filter(pk=group_id).exists()
+
+    @staticmethod
+    def _build_group_students(qs):
+        students_map = {}
+
+        for assignment in qs:
+            student_id = assignment.student_id
+            student_info = students_map.setdefault(student_id, {
+                'studentId': student_id,
+                'matricula': getattr(assignment.student, 'matricula', ''),
+                'fullName': (
+                    f"{assignment.student.first_name} {assignment.student.last_name}".strip()
+                    if assignment.student else ''
+                ),
+                'scores': [],
+                'totalExams': 0,
+            })
+
+            student_info['totalExams'] += 1
+            if assignment.score is not None:
+                student_info['scores'].append(float(assignment.score))
+
+        result = []
+        for student_info in sorted(students_map.values(), key=lambda item: item['fullName'] or ''):
+            scores = student_info['scores']
+            average_grade = (sum(scores) / len(scores)) if scores else None
+            approved = len([score for score in scores if score >= 70]) if scores else 0
+
+            result.append({
+                'studentId': student_info['studentId'],
+                'matricula': student_info['matricula'],
+                'fullName': student_info['fullName'],
+                'totalExams': student_info['totalExams'],
+                'averageGrade': round(average_grade, 2) if average_grade is not None else None,
+                'approvalRate': (approved / len(scores)) * 100 if scores else None,
+            })
+
+        return result
+
     # ===== REPORT: BY EXAM =====
 
     @staticmethod
     def by_exam(data):
+        exam = Exam.objects.select_related(
+            'id_subject', 'id_teacher'
+        ).filter(id_exam=data['examId']).first()
+
+        # Keep the exam report aligned with the exam's currently assigned groups.
+        current_group_ids = ExamGroupAssignment.objects.filter(
+            exam_id=data['examId']
+        ).values_list('group_id', flat=True)
+
         qs = ExamAssignment.objects.select_related(
             'exam',
             'exam__id_subject',
             'exam__id_teacher',
             'student'
-        ).filter(exam_id=data['examId'])
-
-        exam = qs.first().exam if qs.exists() else None
+        ).filter(
+            exam_id=data['examId'],
+            group_id__in=current_group_ids,
+        )
 
         subject_name = ""
         teacher_name = ""
@@ -111,60 +210,42 @@ class ReportService:
     # ===== REPORT: BY GROUP =====
 
     @staticmethod
-    def by_group(data):
+    def by_group(data, user=None):
         qs = ExamAssignment.objects.select_related(
             'student', 'group', 'exam'
         ).filter(group_id=data['groupId'])
 
-    # 🔥 TRAER EL GRUPO DIRECTAMENTE (NO DESDE qs)
+        if user is not None and not ReportService._can_access_group(user, data['groupId']):
+            raise PermissionDenied('No tienes acceso a este grupo.')
+
+        # Traer el grupo directamente para no depender de que existan calificaciones.
         group = Group.objects.select_related('id_generation').filter(
             id_group=data['groupId']
         ).first()
 
-        students_map = {}
+        if group is None:
+            return {
+                'groupId': data['groupId'],
+                'groupLetter': '',
+                'academicLevel': 0,
+                'generationYear': None,
+                'metrics': ReportService._calculate_summary_metrics(qs),
+                'gradeDistribution': ReportService._calculate_distribution(qs),
+                'students': [],
+            }
 
-        for r in qs:
-            sid = r.student_id
-
-            students_map.setdefault(sid, {
-            "studentId": sid,
-            "matricula": getattr(r.student, "matricula", ""),
-            "fullName": f"{r.student.first_name} {r.student.last_name}".strip() if r.student else "",
-            "scores": [],
-            })
-
-            if r.score is not None:
-                students_map[sid]["scores"].append(float(r.score))
-
-        result = []
-
-        for s in students_map.values():
-            scores = s["scores"]
-            if not scores:
-                continue
-
-            avg = sum(scores) / len(scores)
-            approved = len([x for x in scores if x >= 70])
-
-            result.append({
-                "studentId": s["studentId"],
-                "matricula": s["matricula"],
-                "fullName": s["fullName"],
-                "totalExams": len(scores),
-                "averageGrade": avg,
-                "approvalRate": (approved / len(scores)) * 100,
-            })
+        result = ReportService._build_group_students(qs)
 
         return {
-            "groupId": getattr(group, "id_group", data['groupId']),
-            "groupLetter": getattr(group, "group_letter", "") if group else "",
-            "academicLevel": getattr(group, "academic_level", 0) if group else 0,
-            "generationYear": getattr(group.id_generation, "year", None) if group and group.id_generation else None,
+            'groupId': getattr(group, 'id_group', data['groupId']),
+            'groupLetter': getattr(group, 'group_letter', ''),
+            'academicLevel': getattr(group, 'academic_level', 0),
+            'generationYear': getattr(group.id_generation, 'year', None) if group.id_generation else None,
 
-            "metrics": ReportService._calculate_summary_metrics(qs),
-            "gradeDistribution": ReportService._calculate_distribution(qs),
+            'metrics': ReportService._calculate_summary_metrics(qs),
+            'gradeDistribution': ReportService._calculate_distribution(qs),
 
-            "students": result
+            'students': result
         }
     # ===== REPORT: BY STUDENT =====
 
