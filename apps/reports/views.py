@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema
 
+from apps.academic.permissions import IsTeacherOrAdmin
 from .services import ReportService
 from .serializers import (
     ByExamSerializer,
@@ -13,6 +14,7 @@ from .serializers import (
 
 
 class ByExamView(APIView):
+    permission_classes = [IsTeacherOrAdmin]
 
     @extend_schema(
         request=ByExamSerializer,
@@ -29,6 +31,7 @@ class ByExamView(APIView):
 
 
 class ByGroupView(APIView):
+    permission_classes = [IsTeacherOrAdmin]
 
     @extend_schema(
         request=ByGroupSerializer,
@@ -45,6 +48,7 @@ class ByGroupView(APIView):
 
 
 class ByStudentView(APIView):
+    permission_classes = [IsTeacherOrAdmin]
 
     @extend_schema(
         request=ByStudentSerializer,
@@ -61,6 +65,7 @@ class ByStudentView(APIView):
 
 
 class StudentExamDetailView(APIView):
+    permission_classes = [IsTeacherOrAdmin]
 
     @extend_schema(
         request=StudentExamDetailSerializer,
