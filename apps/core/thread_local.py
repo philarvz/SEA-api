@@ -51,14 +51,14 @@ def get_current_user():
     if user is None or not user.is_authenticated:
         return None
 
-    User = get_user_model()
-    if isinstance(user, User):
+    user_model = get_user_model()
+    if isinstance(user, user_model):
         return user
 
     pk = getattr(user, 'pk', None)
     if pk is None:
         return None
     try:
-        return User.objects.get(pk=pk)
-    except User.DoesNotExist:
+        return user_model.objects.get(pk=pk)
+    except user_model.DoesNotExist:
         return None

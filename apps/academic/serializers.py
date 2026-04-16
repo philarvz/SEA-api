@@ -9,6 +9,7 @@ from drf_spectacular.utils import extend_schema_field
 from .models import Generation, Period, Group, Subject, Unit, GroupTeacherAssignment
 from .services import PeriodService
 from apps.users.models import StudentProfile
+from utils.sanitizers import contains_html
 
 
 # ---------------------------------------------------------------------------
@@ -18,18 +19,38 @@ from apps.users.models import StudentProfile
 class GenerationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Generation
-        fields = ['id_generation', 'year', 'total_levels', 'status']
-        read_only_fields = ['id_generation']
+        fields = ['id_generation', 'year', 'total_levels', 'end_year', 'status']
+        read_only_fields = ['id_generation', 'end_year']
 
     def validate_year(self, value):
-        if value < 1900 or value > 2200:
+        from django.utils import timezone
+        current_year = timezone.now().date().year
+        if value < 1900:
             raise serializers.ValidationError('El año de generación no es válido.')
+        if value > current_year:
+            raise serializers.ValidationError(
+                f'No se pueden registrar generaciones con año mayor al actual ({current_year}).'
+            )
         return value
 
     def validate_total_levels(self, value):
         if value < 1:
             raise serializers.ValidationError('El número total de niveles debe ser mayor a 0.')
+        if value > 11:
+            raise serializers.ValidationError('El número total de niveles no puede exceder 11.')
         return value
+
+    def create(self, validated_data):
+        import math
+        validated_data['end_year'] = validated_data['year'] + math.ceil(validated_data['total_levels'] / 3)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        import math
+        year = validated_data.get('year', instance.year)
+        total_levels = validated_data.get('total_levels', instance.total_levels)
+        validated_data['end_year'] = year + math.ceil(total_levels / 3)
+        return super().update(instance, validated_data)
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +74,7 @@ class PeriodSerializer(serializers.ModelSerializer):
 class GroupCreateSerializer(serializers.Serializer):
     """Input serializer for POST /groups/."""
     id_generation = serializers.IntegerField(required=True)
-    group_letter = serializers.CharField(max_length=5, required=True)
+    group_letter = serializers.CharField(max_length=1, required=True)
     academic_level = serializers.IntegerField(min_value=1, required=False)
     status = serializers.BooleanField(default=True)
 
@@ -69,32 +90,53 @@ class GroupCreateSerializer(serializers.Serializer):
         return value
 
     def validate_group_letter(self, value):
-        return value.strip().upper()
+        value = (value or '').strip().upper()
+        if contains_html(value):
+            raise serializers.ValidationError('La letra de grupo no debe contener HTML.')
+        if len(value) != 1 or not value.isalpha():
+            raise serializers.ValidationError('La letra de grupo debe ser exactamente una letra (A-Z).')
+        return value
 
     def validate(self, attrs):
         academic_level = attrs.get('academic_level')
         generation = self.context.get('_generation')
-        if generation and academic_level and academic_level > generation.total_levels:
-            raise serializers.ValidationError({
-                'academic_level': f'El nivel académico no puede exceder {generation.total_levels} (total de niveles de la generación).'
-            })
+        if generation and academic_level:
+            if academic_level > generation.total_levels:
+                raise serializers.ValidationError({
+                    'academic_level': f'El nivel académico no puede exceder {generation.total_levels} (total de niveles de la generación).'
+                })
+            from .services import PeriodService
+            expected_level = PeriodService.calculate_generation_academic_level(
+                generation_year=generation.year,
+                total_levels=generation.total_levels,
+            )
+            if academic_level != expected_level:
+                raise serializers.ValidationError({
+                    'academic_level': f'El nivel académico debe ser {expected_level} para la generación {generation.year} en el periodo actual.'
+                })
         return attrs
 
 
 class GroupUpdateSerializer(serializers.Serializer):
     """Input serializer for PUT /groups/{id}/ — generation is immutable."""
-    group_letter = serializers.CharField(max_length=5, required=True)
+    group_letter = serializers.CharField(max_length=1, required=True)
     academic_level = serializers.IntegerField(min_value=1, required=False)
     status = serializers.BooleanField(required=True)
 
     def validate_group_letter(self, value):
-        return value.strip().upper()
+        value = (value or '').strip().upper()
+        if contains_html(value):
+            raise serializers.ValidationError('La letra de grupo no debe contener HTML.')
+        if len(value) != 1 or not value.isalpha():
+            raise serializers.ValidationError('La letra de grupo debe ser exactamente una letra (A-Z).')
+        return value
 
 
 class GroupSerializer(serializers.ModelSerializer):
     """Output serializer for read operations."""
     generation_year = serializers.IntegerField(source='id_generation.year', read_only=True)
     generation_total_levels = serializers.IntegerField(source='id_generation.total_levels', read_only=True)
+    generation_end_year = serializers.IntegerField(source='id_generation.end_year', read_only=True)
     id_period = serializers.SerializerMethodField()
     period_info = serializers.SerializerMethodField()
     academic_level = serializers.SerializerMethodField()
@@ -105,7 +147,7 @@ class GroupSerializer(serializers.ModelSerializer):
         model = Group
         fields = [
             'id_group', 'id_generation', 'generation_year',
-            'generation_total_levels',
+            'generation_total_levels', 'generation_end_year',
             'id_period', 'period_info',
             'group_letter', 'academic_level', 'students_count',
             'assignments', 'status',
@@ -170,7 +212,7 @@ class UnitSerializer(serializers.ModelSerializer):
 
 
 class SubjectSerializer(serializers.ModelSerializer):
-    number_of_units = serializers.IntegerField(min_value=0, write_only=True, required=False)
+    number_of_units = serializers.IntegerField(min_value=0, max_value=9, write_only=True, required=False)
     units = UnitSerializer(many=True, read_only=True)
 
     class Meta:
@@ -178,9 +220,26 @@ class SubjectSerializer(serializers.ModelSerializer):
         fields = ['id_subject', 'name', 'level_number', 'number_of_units', 'units', 'status']
         read_only_fields = ['id_subject']
 
+    def validate_name(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('El nombre de la materia es requerido.')
+        if contains_html(value):
+            raise serializers.ValidationError('El nombre no debe contener código HTML o scripts.')
+        if len(value) > 150:
+            raise serializers.ValidationError('El nombre no puede exceder 150 caracteres.')
+        return value
+
     def validate_level_number(self, value):
         if value < 1:
             raise serializers.ValidationError('El número de nivel debe ser mayor a 0.')
+        if value > 11:
+            raise serializers.ValidationError('El número de nivel no puede exceder 11.')
+        return value
+
+    def validate_number_of_units(self, value):
+        if value is not None and value > 9:
+            raise serializers.ValidationError('El número de unidades no puede exceder 9.')
         return value
 
 
@@ -269,22 +328,28 @@ class AvailableTeacherSerializer(serializers.Serializer):
 class AssignableGroupSerializer(serializers.ModelSerializer):
     """
     Lightweight read-only serializer for groups available to be selected
-    in the exam assignment dialog. Returns only display and identity fields;
-    no assignment details or student lists are included.
+    in the exam assignment dialog and for teacher's groups-by-subject view.
     """
     generation_year = serializers.IntegerField(source='id_generation.year', read_only=True)
     generation_total_levels = serializers.IntegerField(source='id_generation.total_levels', read_only=True)
+    generation_end_year = serializers.IntegerField(source='id_generation.end_year', read_only=True)
     id_period = serializers.SerializerMethodField()
     period_info = serializers.SerializerMethodField()
     academic_level = serializers.SerializerMethodField()
+    students_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Group
         fields = [
             'id_group', 'id_generation', 'generation_year',
-            'generation_total_levels', 'id_period', 'period_info',
-            'group_letter', 'academic_level', 'status',
+            'generation_total_levels', 'generation_end_year',
+            'id_period', 'period_info',
+            'group_letter', 'academic_level', 'students_count', 'status',
         ]
+
+    @extend_schema_field(serializers.IntegerField())
+    def get_students_count(self, obj):
+        return getattr(obj, 'students_count', obj.students.count())
 
     def _get_current_period(self):
         if not hasattr(self, '_cached_current_period'):
@@ -301,3 +366,18 @@ class AssignableGroupSerializer(serializers.ModelSerializer):
 
     def get_academic_level(self, obj):
         return PeriodService.sync_group_academic_level(obj)
+
+
+class AssignableGroupWithSubjectSerializer(AssignableGroupSerializer):
+    """
+    Extends AssignableGroupSerializer with subject_name injected via context.
+    Used when the caller already knows the subject (e.g. exam-scoped group listing).
+    """
+    subject_name = serializers.SerializerMethodField()
+
+    class Meta(AssignableGroupSerializer.Meta):
+        fields = AssignableGroupSerializer.Meta.fields + ['subject_name']
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_subject_name(self, obj):
+        return self.context.get('subject_name')

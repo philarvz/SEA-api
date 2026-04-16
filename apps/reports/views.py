@@ -7,6 +7,7 @@ from apps.academic.permissions import IsTeacherOrAdmin
 from apps.academic.serializers import AssignableGroupSerializer
 from utils.responses import error_response, success_response
 
+from apps.academic.permissions import IsTeacherOrAdmin
 from .services import ReportService
 from .serializers import (
     ByExamSerializer,

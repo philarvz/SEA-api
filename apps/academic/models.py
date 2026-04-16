@@ -14,10 +14,12 @@ class Generation(BaseAuditModel):
     Academic generation (cohorte): students who enter the same year and
     progress together through the programme.
     total_levels defines how many academic levels this generation will complete.
+    end_year is auto-calculated from year + ceil(total_levels / 3).
     """
     id_generation = models.AutoField(primary_key=True, db_column='id_generation')
     year = models.IntegerField(unique=True)
     total_levels = models.PositiveIntegerField(default=11, db_column='total_levels')
+    end_year = models.IntegerField(null=True, blank=True, db_column='end_year')
     status = models.BooleanField(default=True)
 
     class Meta:
@@ -27,6 +29,8 @@ class Generation(BaseAuditModel):
         ordering = ['-year']
 
     def __str__(self):
+        if self.end_year:
+            return f"Generation {self.year}-{self.end_year}"
         return f"Generation {self.year}"
 
 
@@ -107,7 +111,7 @@ class Group(BaseAuditModel):
         db_column='id_generation',
         related_name='groups',
     )
-    group_letter = models.CharField(max_length=5, db_column='group_letter')
+    group_letter = models.CharField(max_length=1, db_column='group_letter')
     academic_level = models.PositiveIntegerField(db_column='academic_level')
     status = models.BooleanField(default=True)
 
@@ -120,10 +124,10 @@ class Group(BaseAuditModel):
 
     def clean(self):
         if self.academic_level < 1:
-            raise ValidationError('academic_level must be at least 1.')
+            raise ValidationError('El nivel académico debe ser al menos 1.')
         if self.id_generation and self.academic_level > self.id_generation.total_levels:
             raise ValidationError(
-                f'academic_level cannot exceed generation total_levels ({self.id_generation.total_levels}).'
+                f'El nivel académico no puede exceder el total de niveles de la generación ({self.id_generation.total_levels}).'
             )
 
     def save(self, *args, **kwargs):
