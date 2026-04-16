@@ -1,7 +1,11 @@
 from rest_framework.views import APIView
-from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema
+from django.core.exceptions import PermissionDenied
+
+from apps.academic.permissions import IsTeacherOrAdmin
+from apps.academic.serializers import AssignableGroupSerializer
+from utils.responses import error_response, success_response
 
 from apps.academic.permissions import IsTeacherOrAdmin
 from .services import ReportService
@@ -27,7 +31,7 @@ class ByExamView(APIView):
 
         data = ReportService.by_exam(serializer.validated_data)
 
-        return Response({"success": True, "data": data})
+        return success_response(data)
 
 
 class ByGroupView(APIView):
@@ -42,9 +46,12 @@ class ByGroupView(APIView):
         serializer = ByGroupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        data = ReportService.by_group(serializer.validated_data)
+        try:
+            data = ReportService.by_group(serializer.validated_data, user=request.user)
+        except PermissionDenied as exc:
+            return error_response(str(exc), status_code=status.HTTP_403_FORBIDDEN)
 
-        return Response({"success": True, "data": data})
+        return success_response(data)
 
 
 class ByStudentView(APIView):
@@ -61,7 +68,7 @@ class ByStudentView(APIView):
 
         data = ReportService.by_student(serializer.validated_data)
 
-        return Response({"success": True, "data": data})
+        return success_response(data)
 
 
 class StudentExamDetailView(APIView):
@@ -78,4 +85,17 @@ class StudentExamDetailView(APIView):
 
         data = ReportService.student_exam_detail(serializer.validated_data)
 
-        return Response({"success": True, "data": data})
+        return success_response(data)
+
+
+class AccessibleGroupsView(APIView):
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        responses={200: AssignableGroupSerializer(many=True)},
+        description='Grupos accesibles para reportes',
+    )
+    def get(self, request):
+        queryset = ReportService.get_accessible_groups(request.user)
+        serializer = AssignableGroupSerializer(queryset, many=True)
+        return success_response(serializer.data)

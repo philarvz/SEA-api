@@ -886,21 +886,6 @@ class GroupStudentsView(APIView):
         except Group.DoesNotExist:
             return error_response(MSG_GROUP_NOT_FOUND, status_code=status.HTTP_404_NOT_FOUND)
 
-        # Teachers can only see students from groups they are assigned to
-        role = getattr(request.user, 'role', None)
-        if role is None and request.auth is not None:
-            role = request.auth.get('role')
-        if role == 'teacher':
-            assigned = GroupTeacherAssignment.objects.filter(
-                group_id=pk,
-                teacher__user_id=request.user.id,
-            ).exists()
-            if not assigned:
-                return error_response(
-                    'No tienes acceso a los alumnos de este grupo.',
-                    status_code=status.HTTP_403_FORBIDDEN,
-                )
-
         students_qs = (
             StudentProfile.objects
             .filter(group_id=pk)

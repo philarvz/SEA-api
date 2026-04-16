@@ -7,7 +7,7 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParamet
 from django.contrib.auth import get_user_model
 from django.db import models
 
-from .permissions import IsAdmin
+from .permissions import IsAdmin, IsAdminOrTeacherStudentGroupRead
 from utils.sanitizers import sanitize_text, MAX_SEARCH_LENGTH
 
 # Constantes para mensajes de error
@@ -38,7 +38,7 @@ class UserListCreateView(APIView):
         POST /api/users/ - Crear nuevo usuario
     """
 
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrTeacherStudentGroupRead]
 
     @extend_schema(
         summary='Listar todos los usuarios',
@@ -196,7 +196,7 @@ class UserListCreateView(APIView):
             logger.debug('Filtering by status | status={}', status_bool)
 
         # Filtro por grupo (solo para estudiantes)
-        group = request.query_params.get('group', None)
+        group = request.query_params.get('group', None) or request.query_params.get('group_id', None)
         if group:
             try:
                 group_id = int(group)
