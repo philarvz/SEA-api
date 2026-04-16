@@ -6,7 +6,7 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParamet
 from django.contrib.auth import get_user_model
 from django.db import models
 
-from .permissions import IsAdmin
+from .permissions import IsAdmin, IsAdminOrTeacherStudentGroupRead
 
 # Constantes para mensajes de error
 MSG_USER_NOT_FOUND = 'Usuario no encontrado.'
@@ -36,7 +36,7 @@ class UserListCreateView(APIView):
         POST /api/users/ - Crear nuevo usuario
     """
 
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrTeacherStudentGroupRead]
 
     @extend_schema(
         summary='Listar todos los usuarios',
@@ -185,7 +185,7 @@ class UserListCreateView(APIView):
             logger.debug('Filtering by status | status={}', status_bool)
 
         # Filtro por grupo (para listar alumnos de un grupo específico)
-        group_id = request.query_params.get('group_id', None)
+        group_id = request.query_params.get('group_id', None) or request.query_params.get('group', None)
         if group_id:
             queryset = queryset.filter(student_profile__group_id=group_id)
             logger.debug('Filtering by group_id | group_id={}', group_id)
