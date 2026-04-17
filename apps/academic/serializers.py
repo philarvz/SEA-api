@@ -211,6 +211,41 @@ class UnitSerializer(serializers.ModelSerializer):
         read_only_fields = ['id_unit']
 
 
+class UnitInputSerializer(serializers.Serializer):
+    """Payload item for synchronizing units on subject update (PUT)."""
+
+    id_unit = serializers.IntegerField(required=False, allow_null=True)
+    unit_name = serializers.CharField(max_length=150)
+    unit_number = serializers.IntegerField(min_value=1, max_value=9)
+
+    def validate_unit_name(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('El nombre de la unidad es requerido.')
+        if contains_html(value):
+            raise serializers.ValidationError('El nombre no debe contener código HTML o scripts.')
+        if len(value) > 150:
+            raise serializers.ValidationError('El nombre no puede exceder 150 caracteres.')
+        return value
+
+
+class SubjectUnitsPayloadSerializer(serializers.Serializer):
+    """Validates the `units` key when replacing subject units."""
+
+    units = UnitInputSerializer(many=True, allow_empty=True)
+
+    def validate_units(self, value):
+        if len(value) > 9:
+            raise serializers.ValidationError('No puede haber más de 9 unidades.')
+        nums = [item['unit_number'] for item in value]
+        if len(nums) != len(set(nums)):
+            raise serializers.ValidationError('Los números de unidad deben ser únicos.')
+        ids = [item['id_unit'] for item in value if item.get('id_unit') is not None]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError('Identificadores de unidad duplicados.')
+        return value
+
+
 class SubjectSerializer(serializers.ModelSerializer):
     number_of_units = serializers.IntegerField(min_value=0, max_value=9, write_only=True, required=False)
     units = UnitSerializer(many=True, read_only=True)
