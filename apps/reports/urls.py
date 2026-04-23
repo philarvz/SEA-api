@@ -4,6 +4,7 @@ from .views import (
     ByGroupView,
     ByStudentView,
     StudentExamDetailView,
+    ExamGroupStatsView,
 )
 
 urlpatterns = [
@@ -11,4 +12,5 @@ urlpatterns = [
     path('by-group/', ByGroupView.as_view()),
     path('by-student/', ByStudentView.as_view()),
     path('student-exam-detail/', StudentExamDetailView.as_view()),
+    path('exam-group-stats/', ExamGroupStatsView.as_view()),
 ]
