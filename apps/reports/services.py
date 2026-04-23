@@ -1,4 +1,4 @@
-from django.db.models import Avg, Max, Min
+from django.db.models import Avg, Max, Min, Count
 from apps.exams.models import ExamAssignment
 from apps.academic.models import Group  # IMPORTANTE
 from apps.reports.models import VwExamAssignmentDetail, VwExamGroupStats
@@ -18,20 +18,24 @@ class ReportService:
 
     @staticmethod
     def _calculate_summary_metrics(qs):
-        total = qs.count()
+        agg = qs.aggregate(
+            avg=Avg('score'),
+            max=Max('score'),
+            min=Min('score'),
+            total_students=Count('student', distinct=True),
+            total_exams=Count('exam', distinct=True),
+        )
 
-        avg = qs.aggregate(avg=Avg('score'))['avg'] or 0
-        highest = qs.aggregate(max=Max('score'))['max']
-        lowest = qs.aggregate(min=Min('score'))['min']
+        total_assignments = qs.count()
         approved = qs.filter(score__gte=70).count()
 
         return {
-            "totalStudents": total,
-            "totalExams": total,
-            "averageGrade": avg,
-            "approvalRate": (approved / total * 100) if total else 0,
-            "highestGrade": highest,
-            "lowestGrade": lowest,
+            "totalStudents": agg['total_students'],
+            "totalExams": agg['total_exams'],
+            "averageGrade": agg['avg'] or 0,
+            "approvalRate": (approved / total_assignments * 100) if total_assignments else 0,
+            "highestGrade": agg['max'],
+            "lowestGrade": agg['min'],
         }
 
     @staticmethod
