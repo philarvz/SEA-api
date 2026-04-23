@@ -24,3 +24,7 @@ class ByStudentSerializer(BaseReportSerializer):
 class StudentExamDetailSerializer(serializers.Serializer):
     studentId = serializers.IntegerField(required=True)
     examId = serializers.IntegerField(required=True)
+
+
+class ExamGroupStatsSerializer(serializers.Serializer):
+    examId = serializers.IntegerField(required=True)

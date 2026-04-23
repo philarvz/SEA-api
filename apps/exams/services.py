@@ -400,44 +400,22 @@ class ExamAssignmentService:
         """
         Return per-group statistics for an exam.
         If group_id is given, returns only that group's stats (one-element list).
-        Groups come from ExamGroupAssignment so groups with 0 students appear.
-        Aggregations are done at DB level via a single query on ExamAssignment.
+        Uses vw_exam_group_stats database view for pre-aggregated data.
+        Groups with 0 students still appear via ExamGroupAssignment fallback.
         """
-        from django.db.models import Avg, Count, Max, Min
-        from decimal import Decimal
+        from apps.reports.models import VwExamGroupStats
 
         ExamAssignmentService.finalize_expired_assignments_for_exam(exam)
-        minimum = exam.minimum_score
 
-        # --- 1. Aggregate student stats per group in one query ----------------
-        assignment_qs = ExamAssignment.objects.filter(exam=exam)
+        # --- 1. Read pre-aggregated stats from the database view --------------
+        view_qs = VwExamGroupStats.objects.filter(exam_id=exam.pk)
         if group_id is not None:
-            assignment_qs = assignment_qs.filter(group_id=group_id)
+            view_qs = view_qs.filter(group_id=group_id)
 
-        agg_rows = (
-            assignment_qs
-            .values('group_id')
-            .annotate(
-                total_students=Count('id_assignment'),
-                average_score=Avg('score'),
-                highest_score=Max('score'),
-                lowest_score=Min('score'),
-                pending_count=Count('id_assignment', filter=Q(status='pending')),
-                in_progress_count=Count('id_assignment', filter=Q(status='in_progress')),
-                completed_count=Count('id_assignment', filter=Q(status='completed')),
-                approved_count=Count(
-                    'id_assignment',
-                    filter=Q(score__gte=minimum, score__isnull=False),
-                ),
-                scored_count=Count(
-                    'id_assignment',
-                    filter=Q(score__isnull=False),
-                ),
-            )
-        )
-        stats_by_group = {row['group_id']: row for row in agg_rows}
+        stats_by_group = {row.group_id: row for row in view_qs}
 
         # --- 2. List assigned groups (filtered if group_id supplied) ----------
+        #     Needed so groups with 0 students still appear.
         group_qs = ExamGroupAssignment.objects.filter(exam=exam)
         if group_id is not None:
             group_qs = group_qs.filter(group_id=group_id)
@@ -455,25 +433,19 @@ class ExamAssignmentService:
             gen_year = gen.year if gen else ''
             label = f"{grp.academic_level}{grp.group_letter} (Gen {gen_year})"
 
-            agg = stats_by_group.get(ga.group_id)
-            if agg:
-                scored = agg['scored_count']
-                approval_rate = (
-                    round(Decimal(agg['approved_count']) / Decimal(scored) * 100, 2)
-                    if scored > 0 else None
-                )
-                avg_score = round(agg['average_score'], 2) if agg['average_score'] is not None else None
+            vw = stats_by_group.get(ga.group_id)
+            if vw:
                 result.append({
                     'group_id': ga.group_id,
                     'group_label': label,
-                    'total_students': agg['total_students'],
-                    'average_score': avg_score,
-                    'highest_score': agg['highest_score'],
-                    'lowest_score': agg['lowest_score'],
-                    'approval_rate': approval_rate,
-                    'pending_count': agg['pending_count'],
-                    'in_progress_count': agg['in_progress_count'],
-                    'completed_count': agg['completed_count'],
+                    'total_students': vw.total_students,
+                    'average_score': vw.average_score,
+                    'highest_score': vw.highest_score,
+                    'lowest_score': vw.lowest_score,
+                    'approval_rate': vw.approval_rate,
+                    'pending_count': vw.pending_count,
+                    'in_progress_count': vw.in_progress_count,
+                    'completed_count': vw.completed_count,
                 })
             else:
                 result.append({
