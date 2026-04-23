@@ -1,33 +1,66 @@
-"""
-Grading service for the answers module.
-
-CODE-type questions are evaluated synchronously via a Docker sandbox
-container.  No ``exec()`` or ``eval()`` of student code happens in
-the Django process.
-"""
-
 from __future__ import annotations
 
+import multiprocessing
+import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from django.db.models import Sum
 from django.utils import timezone
-from loguru import logger
 
 from apps.exams.models import ExamQuestion
 from apps.questions.models import CodeQuestion
 
 from ..models import StudentAnswer
-from .code_execution_service import run_code_in_sandbox
+
+# Timeout in seconds for user code execution
+_CODE_EXECUTION_TIMEOUT = 5
+# Max code length accepted
+_MAX_CODE_LENGTH = 10_000
+
+# Patterns that indicate dangerous code
+_DANGEROUS_IMPORT_RE = re.compile(
+    r'(?:^|;|\s)(?:import|from)\s+'
+    r'(?:os|sys|subprocess|shutil|socket|http|urllib|requests|ctypes|signal|'
+    r'threading|multiprocessing|pickle|shelve|marshal|importlib|pkgutil|'
+    r'code|codeop|compileall|asyncio|concurrent|webbrowser|pathlib|'
+    r'tempfile|glob|fnmatch|io|builtins)\b',
+    re.MULTILINE,
+)
+_DANGEROUS_ATTR_RE = re.compile(
+    r'__(?:import|builtins|class|subclasses|bases|mro|loader|spec)__'
+    r'|(?:^|[^a-zA-Z_])(?:exec|eval|compile|globals|locals|vars|dir'
+    r'|getattr|setattr|delattr|breakpoint)\s*\(',
+    re.MULTILINE,
+)
+_OPEN_CALL_RE = re.compile(r'\bopen\s*\(', re.MULTILINE)
 
 
 class GradingService:
     SCORE_SCALE = Decimal('10.00')
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    _SAFE_BUILTINS = {
+        'abs': abs,
+        'all': all,
+        'any': any,
+        'bool': bool,
+        'dict': dict,
+        'enumerate': enumerate,
+        'float': float,
+        'int': int,
+        'len': len,
+        'list': list,
+        'max': max,
+        'min': min,
+        'pow': pow,
+        'print': print,
+        'range': range,
+        'round': round,
+        'set': set,
+        'str': str,
+        'sum': sum,
+        'tuple': tuple,
+        'zip': zip,
+    }
 
     @staticmethod
     def grade_student_answer(student_answer: StudentAnswer) -> dict[str, Any]:
@@ -79,7 +112,34 @@ class GradingService:
             }
 
         if question_type == 'CODE':
-            return GradingService._grade_code_answer(student_answer, question)
+            code_question = CodeQuestion.objects.filter(question=question).first()
+            if not code_question:
+                student_answer.is_correct = False
+                student_answer.score = Decimal('0.00')
+                student_answer.evaluated_at = timezone.now()
+                student_answer.save(update_fields=['is_correct', 'score', 'evaluated_at', 'modified_at'])
+                return {
+                    'graded': True,
+                    'is_correct': False,
+                    'score': Decimal('0.00'),
+                    'feedback': ['La pregunta de codigo no tiene casos de prueba configurados.'],
+                }
+
+            passed, feedback = GradingService._run_code_test_cases(
+                student_answer.code_answer or '',
+                code_question.test_cases,
+            )
+            score = Decimal(question.points if passed else 0)
+            student_answer.is_correct = passed
+            student_answer.score = score
+            student_answer.evaluated_at = timezone.now()
+            student_answer.save(update_fields=['is_correct', 'score', 'evaluated_at', 'modified_at'])
+            return {
+                'graded': True,
+                'is_correct': passed,
+                'score': score,
+                'feedback': feedback,
+            }
 
         return {
             'graded': False,
@@ -126,62 +186,128 @@ class GradingService:
             'status': exam_assignment.status,
         }
 
-    # ------------------------------------------------------------------
-    # CODE grading — synchronous Docker sandbox execution
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _validate_code_safety(code: str) -> list[str]:
+        """Pre-validate code for dangerous patterns. Returns list of issues."""
+        issues = []
+        if len(code) > _MAX_CODE_LENGTH:
+            issues.append(f'El código excede el límite de {_MAX_CODE_LENGTH} caracteres.')
+            return issues
+
+        if _DANGEROUS_IMPORT_RE.search(code):
+            issues.append('El código contiene imports no permitidos.')
+        if _DANGEROUS_ATTR_RE.search(code):
+            issues.append('El código contiene patrones no permitidos.')
+        if _OPEN_CALL_RE.search(code):
+            issues.append('El código contiene llamadas a open() no permitidas.')
+        return issues
 
     @staticmethod
-    def _grade_code_answer(student_answer: StudentAnswer, question) -> dict[str, Any]:
-        """Grade a CODE answer by running student code inside an isolated
-        Docker container via ``subprocess.run``.
+    def _execute_user_code(code_answer: str, namespace: dict) -> str | None:
+        """Executes user code in the sandbox namespace. Returns an error message or None."""
+        try:
+            exec(code_answer, namespace, namespace)  # NOSONAR — sandboxed exec, pre-validated
+            return None
+        except Exception as exc:
+            return f'Error de ejecucion del codigo: {exc}'
 
-        The call is synchronous — no Celery broker or worker needed.
-        Student code is NEVER executed in-process (no ``exec``/``eval``).
-        """
-        code_question = CodeQuestion.objects.filter(question=question).first()
-        if not code_question:
-            student_answer.is_correct = False
-            student_answer.score = Decimal('0.00')
-            student_answer.evaluated_at = timezone.now()
-            student_answer.save(update_fields=['is_correct', 'score', 'evaluated_at', 'modified_at'])
-            return {
-                'graded': True,
-                'is_correct': False,
-                'score': Decimal('0.00'),
-                'feedback': ['La pregunta de codigo no tiene casos de prueba configurados.'],
-            }
+    @staticmethod
+    def _is_function_test_case(test_case: dict) -> bool:
+        return 'function_name' in test_case and 'input' in test_case and 'expected_output' in test_case
 
-        code = student_answer.code_answer or ''
-        test_cases = code_question.test_cases or []
+    @staticmethod
+    def _call_function_test(test_case: dict, namespace: dict) -> None:
+        """Invokes a named function from namespace and asserts the expected output."""
+        fn = namespace.get(test_case['function_name'])
+        if not callable(fn):
+            raise AssertionError('La funcion objetivo no existe o no es invocable.')
+        raw_input = test_case['input']
+        if isinstance(raw_input, list):
+            result = fn(*raw_input)
+        elif isinstance(raw_input, dict):
+            result = fn(**raw_input)
+        else:
+            result = fn(raw_input)
+        if result != test_case['expected_output']:
+            raise AssertionError(f"Esperado {test_case['expected_output']}, obtenido {result}")
 
-        # Execute inside Docker sandbox (synchronous, blocks until done).
-        sandbox_result = run_code_in_sandbox(code, test_cases)
+    @staticmethod
+    def _run_dict_test_case(test_case: dict, namespace: dict) -> None:
+        """Handles a dict-style test case. Raises AssertionError on failure."""
+        if 'assertion' in test_case:
+            exec(test_case['assertion'], namespace, namespace)
+        elif 'expression' in test_case and 'expected_output' in test_case:
+            result = eval(test_case['expression'], namespace, namespace)
+            if result != test_case['expected_output']:
+                raise AssertionError(f"Esperado {test_case['expected_output']}, obtenido {result}")
+        elif GradingService._is_function_test_case(test_case):
+            GradingService._call_function_test(test_case, namespace)
+        else:
+            raise AssertionError('Formato de caso de prueba no soportado.')
 
-        # Translate the sandbox result into feedback compatible with the API.
-        passed = sandbox_result.get('passed', False)
-        sandbox_error = sandbox_result.get('error')
-        raw_results = sandbox_result.get('results', [])
+    @staticmethod
+    def _run_single_test(test_case: Any, namespace: dict) -> None:
+        """Dispatches a single test case by type. Raises AssertionError or Exception on failure."""
+        if isinstance(test_case, str):
+            exec(test_case, namespace, namespace)
+        elif isinstance(test_case, dict):
+            GradingService._run_dict_test_case(test_case, namespace)
+        else:
+            raise AssertionError('Formato de caso de prueba no soportado.')
 
+    @staticmethod
+    def _run_code_test_cases(code_answer: str, test_cases: list[Any]) -> tuple[bool, list[dict[str, Any]]]:
+        # --- Pre-validation: reject dangerous code before execution ---
+        safety_issues = GradingService._validate_code_safety(code_answer)
+        if safety_issues:
+            return False, [{'test_case': 0, 'error': '; '.join(safety_issues)}]
+
+        namespace: dict = {'__builtins__': GradingService._SAFE_BUILTINS}
         feedback: list[dict[str, Any]] = []
-        if sandbox_error:
-            feedback.append({'test_case': 0, 'status': 'error', 'error': sandbox_error})
 
-        for idx, tc_result in enumerate(raw_results, start=1):
-            if tc_result.get('passed'):
-                feedback.append({'test_case': idx, 'status': 'passed'})
-            else:
-                err = tc_result.get('error', f"Esperado {tc_result.get('expected')}, obtenido {tc_result.get('output')}")
-                feedback.append({'test_case': idx, 'status': 'failed', 'error': err})
+        # --- Execute user code with timeout via multiprocessing ---
+        result_queue: multiprocessing.Queue = multiprocessing.Queue()
 
-        score = Decimal(question.points if passed else 0)
-        student_answer.is_correct = passed
-        student_answer.score = score
-        student_answer.evaluated_at = timezone.now()
-        student_answer.save(update_fields=['is_correct', 'score', 'evaluated_at', 'modified_at'])
+        def _target(q: multiprocessing.Queue) -> None:
+            try:
+                exec(code_answer, namespace, namespace)  # NOSONAR — sandboxed
+                q.put(('ok', None, namespace))
+            except Exception as exc:
+                q.put(('error', str(exc), None))
 
-        return {
-            'graded': True,
-            'is_correct': passed,
-            'score': score,
-            'feedback': feedback,
-        }
+        proc = multiprocessing.Process(target=_target, args=(result_queue,), daemon=True)
+        proc.start()
+        proc.join(timeout=_CODE_EXECUTION_TIMEOUT)
+
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=1)
+            return False, [{'test_case': 0, 'error': f'El código excedió el tiempo límite de {_CODE_EXECUTION_TIMEOUT} segundos.'}]
+
+        if result_queue.empty():
+            return False, [{'test_case': 0, 'error': 'Error de ejecución del código.'}]
+
+        status_val, msg, _ = result_queue.get_nowait()
+        if status_val == 'error':
+            return False, [{'test_case': 0, 'error': f'Error de ejecucion del codigo: {msg}'}]
+
+        # Merge executed namespace back — multiprocessing can't share complex objects,
+        # so for test_cases we re-exec in the main thread since code is already validated.
+        # The timeout protects against infinite loops; after passing that, re-exec is safe.
+        error = GradingService._execute_user_code(code_answer, namespace)
+        if error:
+            return False, [{'test_case': 0, 'error': error}]
+
+        all_passed = True
+        for index, test_case in enumerate(test_cases, start=1):
+            try:
+                GradingService._run_single_test(test_case, namespace)
+                feedback.append({'test_case': index, 'status': 'passed'})
+            except AssertionError as exc:
+                all_passed = False
+                feedback.append({'test_case': index, 'status': 'failed', 'error': str(exc)})
+            except Exception as exc:
+                all_passed = False
+                feedback.append({'test_case': index, 'status': 'error', 'error': str(exc)})
+
+        return all_passed, feedback

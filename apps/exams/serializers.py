@@ -8,6 +8,7 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from .models import Exam, ExamAssignment, ExamQuestion
 from apps.academic.models import Subject, Unit, Group
+from utils.sanitizers import contains_html
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +36,12 @@ class _ExamSubjectUnitValidatorMixin:
     """
 
     def validate_name(self, value):
-        return value.strip()
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('El nombre del examen es requerido.')
+        if contains_html(value):
+            raise serializers.ValidationError('El nombre no debe contener código HTML o scripts.')
+        return value
 
     def validate_id_subject(self, value):
         try:
@@ -209,6 +215,7 @@ class ExamQuestionsReplaceSerializer(serializers.Serializer):
         child=serializers.IntegerField(min_value=1),
         allow_empty=True,
         required=True,
+        max_length=200,
     )
 
 

@@ -14,7 +14,7 @@ from apps.questions.models import Answer, Question
 from utils.responses import error_response, success_response
 
 from .models import StudentAnswer
-from .serializers import ManualGradeSerializer, StudentAnswerSerializer, SubmitExamSerializer
+from .serializers import ForfeitExamSerializer, ManualGradeSerializer, StudentAnswerSerializer, SubmitExamSerializer
 from .services import GradingService
 
 
@@ -26,6 +26,61 @@ def _get_role(request):
 
 
 _NO_PERMISSION_MSG = 'No tiene permiso para ver estas respuestas.'
+
+
+def _check_assignment_access(request, assignment):
+    """Return an error response if the user cannot access the assignment, else None."""
+    role = _get_role(request)
+    if role == 'student' and assignment.student_id != request.user.pk:
+        return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
+    if role == 'student' and timezone.now() <= assignment.available_to:
+        return error_response(
+            'Tus respuestas estarán disponibles cuando termine el periodo del examen.',
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    if role == 'teacher' and assignment.exam.id_teacher_id != request.user.pk:
+        return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
+    if role not in ('student', 'teacher', 'admin'):
+        return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
+    return None
+
+
+def _build_unanswered_record(assignment_pk, q):
+    """Build a virtual answer record for a question that was not answered."""
+    correct_answer_text = None
+    if q.question_type == 'MULTIPLE_CHOICE':
+        first_correct = q.answers.filter(is_correct=True).first()
+        correct_answer_text = first_correct.answer_text if first_correct else None
+
+    correct_answers_texts = (
+        list(q.answers.filter(is_correct=True).values_list('answer_text', flat=True))
+        if q.question_type == 'MULTIPLE_SELECTION' else []
+    )
+
+    return {
+        'id_student_answer': None,
+        'exam_assignment': assignment_pk,
+        'question': q.pk,
+        'question_type': q.question_type,
+        'question_statement': q.statement,
+        'question_image_url': getattr(q, 'image_url', None),
+        'question_points': q.points,
+        'question_difficulty': q.difficulty,
+        'question_bloom_level': q.bloom_level,
+        'selected_answer': None,
+        'selected_answer_text': None,
+        'selected_answers': [],
+        'selected_answers_texts': [],
+        'correct_answer_text': correct_answer_text,
+        'correct_answers_texts': correct_answers_texts,
+        'answer_text': '',
+        'code_answer': '',
+        'is_correct': None,
+        'score': None,
+        'evaluated_at': None,
+        'created_at': None,
+        'modified_at': None,
+    }
 
 
 class SubmitExamAnswersView(APIView):
@@ -278,13 +333,38 @@ class ManualGradeAnswerView(APIView):
             return error_response('Datos invalidos.', serializer.errors)
 
         payload = serializer.validated_data
-        student_answer = (
-            StudentAnswer.objects.select_related('exam_assignment', 'exam_assignment__exam', 'question')
-            .filter(pk=payload['student_answer_id'])
-            .first()
-        )
-        if not student_answer:
-            return error_response('Respuesta del estudiante no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+
+        if payload.get('student_answer_id'):
+            student_answer = (
+                StudentAnswer.objects.select_related('exam_assignment', 'exam_assignment__exam', 'question')
+                .filter(pk=payload['student_answer_id'])
+                .first()
+            )
+            if not student_answer:
+                return error_response('Respuesta del estudiante no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+        else:
+            # Unanswered question: find or create StudentAnswer
+            assignment = (
+                ExamAssignment.objects.select_related('exam')
+                .filter(pk=payload['exam_assignment_id'])
+                .first()
+            )
+            if not assignment:
+                return error_response('Asignación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+
+            question = Question.objects.filter(pk=payload['question_id']).first()
+            if not question:
+                return error_response('Pregunta no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+
+            # Verify the question belongs to this exam
+            if not ExamQuestion.objects.filter(id_exam=assignment.exam, id_question=question).exists():
+                return error_response('La pregunta no pertenece a este examen.', status_code=status.HTTP_400_BAD_REQUEST)
+
+            student_answer, _created = StudentAnswer.objects.get_or_create(
+                exam_assignment=assignment,
+                question=question,
+                defaults={'is_correct': None, 'score': None},
+            )
 
         role = _get_role(request)
         if role == 'teacher' and student_answer.exam_assignment.exam.id_teacher_id != request.user.pk:
@@ -322,6 +402,123 @@ class ManualGradeAnswerView(APIView):
         )
 
 
+def _save_forfeit_answers(assignment, answers_data):
+    """Persist any partial answers from a forfeited exam. Skips invalid or already-saved ones."""
+    if not answers_data:
+        return
+
+    exam_question_ids = set(
+        ExamQuestion.objects.filter(id_exam=assignment.exam)
+        .values_list('id_question_id', flat=True)
+    )
+    valid_ids = {item['question_id'] for item in answers_data} & exam_question_ids
+    existing_ids = set(
+        StudentAnswer.objects.filter(
+            exam_assignment=assignment,
+            question_id__in=valid_ids,
+        ).values_list('question_id', flat=True)
+    )
+    new_ids = valid_ids - existing_ids
+
+    if not new_ids:
+        return
+
+    questions = {
+        q.id_question: q
+        for q in Question.objects.filter(id_question__in=new_ids).prefetch_related('answers')
+    }
+    options_map = {
+        qid: {opt.id_answer: opt for opt in Answer.objects.filter(id_question_id=qid)}
+        for qid in new_ids
+    }
+    for answer_data in answers_data:
+        qid = answer_data['question_id']
+        if qid not in new_ids:
+            continue
+        question = questions.get(qid)
+        if not question:
+            continue
+        prepared, err = SubmitExamAnswersView._prepare_single_answer(answer_data, question, options_map)
+        if err or prepared is None:
+            continue
+        sa = StudentAnswer(
+            exam_assignment=assignment,
+            question=question,
+            answer_text=prepared['answer_text'],
+            code_answer=prepared['code_answer'],
+            selected_answer=prepared['selected_answer'],
+        )
+        sa.save()
+        if question.question_type == 'MULTIPLE_SELECTION':
+            sa.selected_answers.set(prepared['selected_answers'])
+        GradingService.grade_student_answer(sa)
+
+
+class ForfeitExamView(APIView):
+    """
+    Force-closes a secure-mode exam when the student exits fullscreen.
+    Accepts any answers already filled in (can be empty list) and
+    grades them, then marks the assignment as completed regardless.
+    """
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    @extend_schema(
+        request=ForfeitExamSerializer,
+        responses={200: OpenApiResponse(description='Examen cerrado automáticamente')},
+        summary='Abandonar/cerrar examen de modo seguro',
+        tags=['Respuestas'],
+    )
+    def post(self, request):
+        serializer = ForfeitExamSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response('Datos inválidos.', serializer.errors)
+
+        payload = serializer.validated_data
+        now = timezone.now()
+
+        assignment = (
+            ExamAssignment.objects.select_related('exam')
+            .filter(pk=payload['exam_assignment_id'])
+            .first()
+        )
+        if not assignment:
+            return error_response('Asignación no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
+        if assignment.student_id != request.user.pk:
+            return error_response('No tiene permiso para esta asignación.', status_code=status.HTTP_403_FORBIDDEN)
+        if assignment.status == 'completed':
+            score_summary = {
+                'score': assignment.score,
+                'is_passed': assignment.is_passed,
+                'status': 'completed',
+            }
+            return success_response(
+                {'assignment_id': assignment.pk, 'status': 'completed', 'score_summary': score_summary, 'graded_answers': []},
+                'La asignación ya fue completada.',
+            )
+
+        answers_data = payload.get('answers', [])
+
+        with transaction.atomic():
+            _save_forfeit_answers(assignment, answers_data)
+            if assignment.attempt_date is None:
+                assignment.attempt_date = now
+            score_summary = GradingService.recalculate_assignment_score(assignment)
+
+        logger.info(
+            'Examen cerrado por abandono de modo seguro | assignment={} student={}',
+            assignment.pk, request.user.pk,
+        )
+        return success_response(
+            {
+                'assignment_id': assignment.pk,
+                'status': 'completed',
+                'score_summary': score_summary,
+                'graded_answers': [],
+            },
+            'Examen cerrado automáticamente.',
+        )
+
+
 class AssignmentAnswersView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -339,18 +536,9 @@ class AssignmentAnswersView(APIView):
         if not assignment:
             return error_response('Asignacion no encontrada.', status_code=status.HTTP_404_NOT_FOUND)
 
-        role = _get_role(request)
-        if role == 'student' and assignment.student_id != request.user.pk:
-            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
-        if role == 'student' and timezone.now() <= assignment.available_to:
-            return error_response(
-                'Tus respuestas estarán disponibles cuando termine el periodo del examen.',
-                status_code=status.HTTP_403_FORBIDDEN,
-            )
-        if role == 'teacher' and assignment.exam.id_teacher_id != request.user.pk:
-            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
-        if role not in ('student', 'teacher', 'admin'):
-            return error_response(_NO_PERMISSION_MSG, status_code=status.HTTP_403_FORBIDDEN)
+        access_error = _check_assignment_access(request, assignment)
+        if access_error:
+            return access_error
 
         answers = (
             StudentAnswer.objects.filter(exam_assignment=assignment)
@@ -359,6 +547,19 @@ class AssignmentAnswersView(APIView):
             .order_by('id_student_answer')
         )
         data = StudentAnswerSerializer(answers, many=True).data
+
+        # Include unanswered questions so the teacher can see and grade them
+        answered_question_ids = set(answers.values_list('question_id', flat=True))
+        exam_questions = (
+            ExamQuestion.objects.filter(id_exam=assignment.exam)
+            .select_related('id_question')
+            .prefetch_related('id_question__answers')
+        )
+        for eq in exam_questions:
+            q = eq.id_question
+            if q.pk not in answered_question_ids:
+                data.append(_build_unanswered_record(assignment.pk, q))
+
         return success_response(
             {
                 'assignment_id': assignment.pk,

@@ -3,9 +3,11 @@ URL configuration for SEA-API project.
 """
 from django.contrib import admin
 from django.urls import path, include
+from .views import home
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
 urlpatterns = [
+    path('', home),
     path('admin/', admin.site.urls),
     
     # API endpoints
@@ -17,6 +19,7 @@ urlpatterns = [
     path('api/answers/', include('apps.answers.urls')),
     path('api/users/', include('apps.users.urls')),
     path('api/audit-logs/', include('apps.audit.urls')),
+    path('api/reports/', include('apps.reports.urls')),
     
     # Swagger/OpenAPI documentation
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
