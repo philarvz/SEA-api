@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'apps.exams',
     'apps.answers',
     'apps.audit',
+    'apps.reports',
 ]
 
 # Custom user model

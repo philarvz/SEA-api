@@ -9,7 +9,8 @@ from .serializers import (
     ByExamSerializer,
     ByGroupSerializer,
     ByStudentSerializer,
-    StudentExamDetailSerializer
+    StudentExamDetailSerializer,
+    ExamGroupStatsSerializer,
 )
 
 
@@ -77,5 +78,22 @@ class StudentExamDetailView(APIView):
         serializer.is_valid(raise_exception=True)
 
         data = ReportService.student_exam_detail(serializer.validated_data)
+
+        return Response({"success": True, "data": data})
+
+
+class ExamGroupStatsView(APIView):
+    permission_classes = [IsTeacherOrAdmin]
+
+    @extend_schema(
+        request=ExamGroupStatsSerializer,
+        responses={200: dict},
+        description="Estadísticas por grupo usando vista de base de datos"
+    )
+    def post(self, request):
+        serializer = ExamGroupStatsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        data = ReportService.group_stats_from_view(serializer.validated_data['examId'])
 
         return Response({"success": True, "data": data})
