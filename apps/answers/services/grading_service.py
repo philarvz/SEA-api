@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import multiprocessing
+import threading
 import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
@@ -265,38 +265,27 @@ class GradingService:
         namespace: dict = {'__builtins__': GradingService._SAFE_BUILTINS}
         feedback: list[dict[str, Any]] = []
 
-        # --- Execute user code with timeout via multiprocessing ---
-        result_queue: multiprocessing.Queue = multiprocessing.Queue()
+        # --- Execute user code with timeout via threading ---
+        exec_result: dict[str, Any] = {'status': 'ok', 'error': None}
 
-        def _target(q: multiprocessing.Queue) -> None:
+        def _target() -> None:
             try:
                 exec(code_answer, namespace, namespace)  # NOSONAR — sandboxed
-                q.put(('ok', None, namespace))
             except Exception as exc:
-                q.put(('error', str(exc), None))
+                exec_result['status'] = 'error'
+                exec_result['error'] = str(exc)
 
-        proc = multiprocessing.Process(target=_target, args=(result_queue,), daemon=True)
-        proc.start()
-        proc.join(timeout=_CODE_EXECUTION_TIMEOUT)
+        thread = threading.Thread(target=_target, daemon=True)
+        thread.start()
+        thread.join(timeout=_CODE_EXECUTION_TIMEOUT)
 
-        if proc.is_alive():
-            proc.terminate()
-            proc.join(timeout=1)
+        if thread.is_alive():
             return False, [{'test_case': 0, 'error': f'El código excedió el tiempo límite de {_CODE_EXECUTION_TIMEOUT} segundos.'}]
 
-        if result_queue.empty():
-            return False, [{'test_case': 0, 'error': 'Error de ejecución del código.'}]
+        if exec_result['status'] == 'error':
+            return False, [{'test_case': 0, 'error': f'Error de ejecucion del codigo: {exec_result["error"]}'}]
 
-        status_val, msg, _ = result_queue.get_nowait()
-        if status_val == 'error':
-            return False, [{'test_case': 0, 'error': f'Error de ejecucion del codigo: {msg}'}]
-
-        # Merge executed namespace back — multiprocessing can't share complex objects,
-        # so for test_cases we re-exec in the main thread since code is already validated.
-        # The timeout protects against infinite loops; after passing that, re-exec is safe.
-        error = GradingService._execute_user_code(code_answer, namespace)
-        if error:
-            return False, [{'test_case': 0, 'error': error}]
+        # Namespace is shared with the thread, so no need to re-exec.
 
         all_passed = True
         for index, test_case in enumerate(test_cases, start=1):
